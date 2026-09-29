@@ -2,3 +2,5 @@
 recordings/
 state/
 __pycache__/
+mac/.build/
+mac/build/

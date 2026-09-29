@@ -283,10 +283,14 @@ def cmd_skip(args):
     print(f"{OK} {len(names)}개를 건너뛰기로 표시했습니다.")
 
 
-def cmd_setup_tools(_args):
-    print(f"ffmpeg: {tools.ffmpeg()}")
+def cmd_setup_tools(args):
+    print(f"ffmpeg: {tools.ffmpeg()}", flush=True)
     rc = tools.rclone() or tools.install_rclone()
-    print(f"rclone: {rc}")
+    print(f"rclone: {rc}", flush=True)
+    if args.model:
+        from huggingface_hub import snapshot_download
+        print("받아쓰기 모델 내려받는 중…", flush=True)
+        print(f"model: {snapshot_download(config.load().whisper_model)}")
 
 
 def cmd_drive(args):
@@ -342,7 +346,9 @@ def main():
     p.add_argument("names", nargs="*")
     p.add_argument("--all-new", action="store_true", help="연결된 DJI의 새 녹음 전부")
     p.set_defaults(fn=cmd_skip)
-    sub.add_parser("setup-tools", help="ffmpeg·rclone 준비 (Homebrew 불필요)").set_defaults(fn=cmd_setup_tools)
+    p = sub.add_parser("setup-tools", help="ffmpeg·rclone 준비 (Homebrew 불필요)")
+    p.add_argument("--model", action="store_true", help="받아쓰기 모델도 미리 내려받기")
+    p.set_defaults(fn=cmd_setup_tools)
     p = sub.add_parser("drive", help="Google Drive 연결")
     p.add_argument("action", choices=["remotes", "connect"])
     p.add_argument("name", nargs="?", default="gdrive")

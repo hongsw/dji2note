@@ -3,7 +3,7 @@
 #   curl -fsSL https://raw.githubusercontent.com/hongsw/dji2note/main/install.sh | bash
 set -euo pipefail
 
-REPO="${DJI2NOTE_REPO:-git+https://github.com/hongsw/dji2note}"
+REPO="${DJI2NOTE_REPO:-https://github.com/hongsw/dji2note/archive/refs/heads/main.zip}"
 say() { printf "\033[1;34m==>\033[0m %s\n" "$*"; }
 die() { printf "\033[1;31m오류:\033[0m %s\n" "$*" >&2; exit 1; }
 

@@ -47,3 +47,14 @@ def upload(cfg: Config, folder: Path) -> str:
         if out.returncode != 0:
             raise RuntimeError(f"Drive 업로드 실패: {out.stderr.strip()[-400:]}")
     return dest
+
+
+def folder_url(cfg: Config, name: str) -> str:
+    """업로드한 폴더의 Drive 웹 주소(공유 링크를 만들지 않고 폴더 ID만 조회)."""
+    import json
+    out = subprocess.run([rclone_path(), "lsjson", f"{cfg.rclone_remote}:{cfg.drive_folder}", "--dirs-only"],
+                         capture_output=True, text=True)
+    for item in json.loads(out.stdout or "[]"):
+        if item.get("Name") == name and item.get("ID"):
+            return f"https://drive.google.com/drive/folders/{item['ID']}"
+    return ""

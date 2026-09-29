@@ -131,6 +131,7 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True) -> dict:
     result = {"status": "done", "notes": str(folder)}
     if cfg.upload == "rclone":
         result["drive"] = upload.upload(cfg, folder)
+        result["drive_url"] = upload.folder_url(cfg, folder.name)
         log(f"업로드: {result['drive']}")
     return result
 

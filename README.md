@@ -38,7 +38,7 @@ dji2note와 필요한 도구(ffmpeg·rclone)를 설치한 뒤 **설정 마법사
 
 > 처음 자동 실행될 때 macOS가 **"이동식 볼륨에 접근"** 권한을 물으면 **허용**을 누르세요.
 
-직접 설치하려면: `uv tool install git+https://github.com/hongsw/dji2note && dji2note setup-tools && dji2note init`
+직접 설치하려면: `uv tool install https://github.com/hongsw/dji2note/archive/refs/heads/main.zip && dji2note setup-tools && dji2note init`
 
 ## 사용법
 평소에는 **DJI를 꽂기만 하면 됩니다.** 그 밖의 명령:
