@@ -1,0 +1,21 @@
+[project]
+name = "dji2note"
+version = "0.1.0"
+description = "DJI Mic 녹음을 연결만 하면 받아쓰기·화자 분리·요약해서 Google Drive에 올려 주는 Mac 도구"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=0.40",
+    "imageio-ffmpeg>=0.6.0",
+    "markdown>=3.5",
+    "mlx-whisper>=0.4",
+    "numpy",
+]
+
+[project.scripts]
+dji2note = "dji2note.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,76 @@
+"""설정 파일(~/.config/dji2note/config.toml)과 상태 파일 관리."""
+import json
+import os
+import tomllib
+from dataclasses import asdict, dataclass, field
+from pathlib import Path
+
+CONFIG_DIR = Path(os.environ.get("DJI2NOTE_HOME", Path.home() / ".config" / "dji2note"))
+CONFIG_FILE = CONFIG_DIR / "config.toml"
+STATE_FILE = CONFIG_DIR / "state.json"
+LOCK_FILE = CONFIG_DIR / "run.lock"
+LOG_FILE = Path.home() / "Library" / "Logs" / "dji2note.log"
+
+
+@dataclass
+class Config:
+    output_dir: str = str(Path.home() / "dji2note")
+    language: str = "ko"
+    whisper_model: str = "mlx-community/whisper-large-v3-turbo"
+    # llm_backend: "claude-cli" | "anthropic-api" | "none"
+    llm_backend: str = "none"
+    llm_model: str = "claude-sonnet-5"
+    anthropic_api_key: str = ""
+    # upload: "none" | "rclone"
+    upload: str = "none"
+    rclone_remote: str = "gdrive"
+    drive_folder: str = "dji2note"
+    notify: bool = True
+    extra: dict = field(default_factory=dict)
+
+    @property
+    def notes_dir(self) -> Path:
+        return Path(self.output_dir).expanduser() / "notes"
+
+    @property
+    def recordings_dir(self) -> Path:
+        return Path(self.output_dir).expanduser() / "recordings"
+
+
+def load() -> Config:
+    if not CONFIG_FILE.exists():
+        return Config()
+    data = tomllib.loads(CONFIG_FILE.read_text())
+    known = {k: v for k, v in data.items() if k in Config.__dataclass_fields__}
+    return Config(**known)
+
+
+def _toml_value(v):
+    if isinstance(v, bool):
+        return "true" if v else "false"
+    if isinstance(v, (int, float)):
+        return str(v)
+    return json.dumps(str(v), ensure_ascii=False)
+
+
+def save(cfg: Config):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    lines = ["# dji2note 설정 — `dji2note init`으로 다시 만들 수 있습니다"]
+    for k, v in asdict(cfg).items():
+        if k != "extra":
+            lines.append(f"{k} = {_toml_value(v)}")
+    CONFIG_FILE.write_text("\n".join(lines) + "\n")
+    CONFIG_FILE.chmod(0o600)  # API 키가 들어갈 수 있음
+
+
+def load_state() -> dict:
+    if STATE_FILE.exists():
+        return json.loads(STATE_FILE.read_text())
+    return {}
+
+
+def save_state(state: dict):
+    CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    tmp = STATE_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(state, ensure_ascii=False, indent=1))
+    tmp.replace(STATE_FILE)

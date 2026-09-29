@@ -1,0 +1,4 @@
+.venv/
+recordings/
+state/
+__pycache__/
