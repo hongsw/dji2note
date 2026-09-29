@@ -283,6 +283,16 @@ def cmd_skip(args):
     print(f"{OK} {len(names)}개를 건너뛰기로 표시했습니다.")
 
 
+def cmd_render(args):
+    """Markdown 회의록을 HTML로 (Mac 앱의 보기·서식 복사용)."""
+    path = Path(args.file).expanduser()
+    html = upload.md_to_html(path.read_text(), path.stem)
+    if args.fragment:
+        import re
+        html = re.search(r"<body>(.*)</body>", html, re.S).group(1)
+    sys.stdout.write(html)
+
+
 def cmd_setup_tools(args):
     print(f"ffmpeg: {tools.ffmpeg()}", flush=True)
     rc = tools.rclone() or tools.install_rclone()
@@ -346,6 +356,10 @@ def main():
     p.add_argument("names", nargs="*")
     p.add_argument("--all-new", action="store_true", help="연결된 DJI의 새 녹음 전부")
     p.set_defaults(fn=cmd_skip)
+    p = sub.add_parser("render", help="Markdown 회의록을 HTML로 출력")
+    p.add_argument("file")
+    p.add_argument("--fragment", action="store_true", help="<body> 안쪽만")
+    p.set_defaults(fn=cmd_render)
     p = sub.add_parser("setup-tools", help="ffmpeg·rclone 준비 (Homebrew 불필요)")
     p.add_argument("--model", action="store_true", help="받아쓰기 모델도 미리 내려받기")
     p.set_defaults(fn=cmd_setup_tools)

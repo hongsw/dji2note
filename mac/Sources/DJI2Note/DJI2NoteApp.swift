@@ -20,6 +20,11 @@ struct DJI2NoteApp: App {
         }
         .windowResizability(.contentSize)
 
+        WindowGroup("회의록", id: "viewer", for: NoteRef.self) { $ref in
+            if let ref { NoteViewer(ref: ref) }
+        }
+        .defaultSize(width: 760, height: 720)
+
         MenuBarExtra {
             MenuPanel()
                 .environmentObject(model)
@@ -113,37 +118,5 @@ struct MenuPanel: View {
     private func show() {
         openWindow(id: "main")
         NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
-/// 처리 기록 한 줄: 폴더명 + [폴더] [Drive] 버튼
-struct HistoryRow: View {
-    let item: HistoryItem
-    var compact = false
-
-    var body: some View {
-        HStack {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(title).font(compact ? .callout : .body).lineLimit(1)
-                if !compact, let at = item.entry.at {
-                    Text("처리: " + at.replacingOccurrences(of: "T", with: " ").prefix(16)).font(.caption).foregroundStyle(.secondary)
-                }
-            }
-            Spacer()
-            if let notes = item.entry.notes {
-                Button { NSWorkspace.shared.open(URL(filePath: notes)) } label: { Image(systemName: "folder") }
-                    .help("Mac의 회의록 폴더 열기")
-            }
-            if let url = item.entry.drive_url, let u = URL(string: url), !url.isEmpty {
-                Button { NSWorkspace.shared.open(u) } label: { Image(systemName: "globe") }
-                    .help("Google Drive에서 열기")
-            }
-        }
-        .buttonStyle(.borderless)
-    }
-
-    private var title: String {
-        if let notes = item.entry.notes { return URL(filePath: notes).lastPathComponent }
-        return item.name
     }
 }

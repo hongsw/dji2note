@@ -4,6 +4,7 @@ import SwiftUI
 struct SettingsView: View {
     @EnvironmentObject var model: AppModel
     @State private var tab = UserDefaults.standard.string(forKey: "debugTab") ?? "history"
+    @Environment(\.openWindow) private var openWindow
 
     var body: some View {
         TabView(selection: $tab) {
@@ -18,7 +19,13 @@ struct SettingsView: View {
         }
         .padding()
         .frame(width: 680, height: 540)
-        .task { await model.refresh() }
+        .task {
+            await model.refresh()
+            // 개발용: --args -debugOpenNote <회의록 폴더>
+            if let folder = UserDefaults.standard.string(forKey: "debugOpenNote") {
+                openWindow(id: "viewer", value: NoteRef(folder: folder, doc: .summary))
+            }
+        }
     }
 }
 
