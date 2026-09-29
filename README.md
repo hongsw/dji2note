@@ -17,7 +17,22 @@ DJI Mic 연결 → 새 녹음 복사 → Whisper 받아쓰기 → 화자 분리(
 - (선택) 화자 분리·요약용 AI: [Claude Code](https://claude.com/claude-code) 로그인 **또는** Anthropic API 키
 - (선택) Google 계정 — Drive 업로드용
 
-## 설치 (한 줄)
+## 설치 ① Mac 앱 (권장)
+메뉴바에 상주하는 네이티브 앱입니다. 설치·설정을 화면에서 안내하고, DJI를 꽂으면 진행 상황을 보여 줍니다.
+
+**방법 A — 터미널 한 줄** (경고 없이 바로 열림)
+```sh
+curl -fsSL https://raw.githubusercontent.com/hongsw/dji2note/main/install-app.sh | bash
+```
+
+**방법 B — DMG**: [최신 릴리스](https://github.com/hongsw/dji2note/releases/latest)에서 `DJI2Note.dmg`를 받아 앱을 `응용 프로그램`으로 끌어 옵니다.
+> 아직 Apple 공증을 받지 않은 앱이라 처음 열 때 "확인할 수 없음" 경고가 뜹니다.
+> **시스템 설정 → 개인정보 보호 및 보안 → 맨 아래 "그래도 열기"**를 누르면 됩니다(한 번만).
+
+앱을 열면 설정 마법사가 이어집니다: **엔진 설치 → 요약 AI(Claude 로그인 / API 키) → Google 계정 연결 → 마무리**.
+관리자 암호나 Homebrew는 필요 없고, 모든 파일은 `~/Library/Application Support/DJI2Note`에 설치됩니다.
+
+## 설치 ② 터미널(CLI)만
 터미널을 열고 붙여 넣으세요.
 
 ```sh
@@ -69,6 +84,14 @@ dji2note init                   # 설정 다시 하기
 송신기 1개로 녹음하면 **마이크를 단 사람(A)은 크게, 상대방(B)은 작게** 녹음됩니다. 이 음량 차이를 1차 기준으로 쓰고, AI가 대화 흐름(질문-대답, 말투)으로 보정합니다.
 - 두 사람이 마이크에서 비슷한 거리에 있으면 정확도가 떨어집니다. 불확실한 줄은 `(?)`로 표시됩니다.
 - AI를 쓰지 않으면 음량만으로 나누므로 더 부정확하고 요약은 만들지 않습니다.
+
+## Mac 앱 개발
+```sh
+cd mac && ./scripts/build.sh      # → mac/build/DJI2Note.app, DJI2Note.dmg, DJI2Note.zip
+open build/DJI2Note.app --args -debugStep 2          # 마법사 특정 단계 바로 보기
+open build/DJI2Note.app --args -setupDone YES -debugTab ai
+```
+SwiftUI(macOS 14+) 메뉴바 앱이 Python 엔진(`dji2note` CLI)을 설치·호출합니다. 앱은 `NSWorkspace` 마운트 알림으로 DJI 연결을 감지합니다.
 
 ## 설정 파일
 `~/.config/dji2note/config.toml` — `dji2note init`으로 바꾸거나 직접 수정합니다.

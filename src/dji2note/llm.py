@@ -71,7 +71,9 @@ def ask(cfg: Config, prompt: str) -> str:
         cmd = [cli, "-p", "--output-format", "text", "--tools", "", "--no-session-persistence"]
         if cfg.llm_model:
             cmd += ["--model", cfg.llm_model]
-        out = subprocess.run(cmd, input=prompt, capture_output=True, text=True,
+        import getpass
+        env = {**os.environ, "USER": os.environ.get("USER") or getpass.getuser()}  # 로그인 확인에 필요
+        out = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env,
                              cwd=tempfile.gettempdir(), timeout=1800)
         if out.returncode != 0 or not out.stdout.strip():
             raise RuntimeError(f"claude CLI 실패: {(out.stderr or out.stdout)[-400:]}")

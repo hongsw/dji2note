@@ -1,0 +1,138 @@
+import SwiftUI
+
+/// 설정이 끝난 뒤의 메인 창
+struct SettingsView: View {
+    @EnvironmentObject var model: AppModel
+    @State private var tab = UserDefaults.standard.string(forKey: "debugTab") ?? "history"
+
+    var body: some View {
+        TabView(selection: $tab) {
+            HistoryTab().tabItem { Label("회의록", systemImage: "doc.text") }.tag("history")
+            Form { GeneralSection(); AutomationSection() }.formStyle(.grouped)
+                .tabItem { Label("일반", systemImage: "gearshape") }.tag("general")
+            Form { AISection() }.formStyle(.grouped)
+                .tabItem { Label("AI", systemImage: "sparkles") }.tag("ai")
+            Form { DriveSection() }.formStyle(.grouped)
+                .tabItem { Label("Google Drive", systemImage: "icloud.and.arrow.up") }.tag("drive")
+            DiagnosticsTab().tabItem { Label("점검", systemImage: "stethoscope") }.tag("doctor")
+        }
+        .padding()
+        .frame(width: 680, height: 540)
+        .task { await model.refresh() }
+    }
+}
+
+struct HistoryTab: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                VStack(alignment: .leading) {
+                    Text(model.statusText).font(.headline)
+                    if let p = model.progress { ProgressView(value: p).frame(width: 260) }
+                }
+                Spacer()
+                Button { model.processConnected() } label: { Label("DJI 녹음 처리", systemImage: "play.fill") }
+                    .disabled(model.isBusy)
+                Button { model.chooseAndProcessFiles() } label: { Label("파일 처리…", systemImage: "doc.badge.plus") }
+                    .disabled(model.isBusy)
+            }
+
+            if !model.connected.isEmpty {
+                GroupBox("연결된 DJI 녹음") {
+                    List(model.connected) { rec in
+                        HStack {
+                            Text(rec.start.prefix(16).replacingOccurrences(of: "T", with: " "))
+                                .monospacedDigit()
+                            Text(rec.name).foregroundStyle(.secondary).lineLimit(1)
+                            Spacer()
+                            StatusBadge(status: rec.status)
+                            if rec.status != "done" {
+                                Button("처리") { model.processFiles([URL(filePath: rec.path)], join: false) }
+                                    .disabled(model.isBusy)
+                            }
+                        }
+                    }
+                    .frame(minHeight: 90, maxHeight: 150)
+                }
+            }
+
+            GroupBox("처리한 회의록") {
+                if model.history.isEmpty {
+                    Text("아직 없습니다. DJI를 연결하거나 파일을 처리해 보세요.")
+                        .foregroundStyle(.secondary).frame(maxWidth: .infinity, minHeight: 80)
+                } else {
+                    List(model.history) { HistoryRow(item: $0) }
+                }
+            }
+            HStack {
+                Button("회의록 폴더 열기") { model.openNotesFolder() }
+                Spacer()
+                Button("새로고침") { Task { await model.refresh() } }
+            }
+        }
+    }
+}
+
+struct StatusBadge: View {
+    let status: String
+    var body: some View {
+        let (text, color): (String, Color) = switch status {
+        case "done": ("완료", .green)
+        case "seen": ("건너뜀", .secondary)
+        case "no_speech": ("대화 없음", .secondary)
+        default: ("새 녹음", .blue)
+        }
+        Text(text).font(.caption).padding(.horizontal, 6).padding(.vertical, 2)
+            .background(color.opacity(0.15), in: Capsule()).foregroundStyle(color)
+    }
+}
+
+struct DiagnosticsTab: View {
+    @EnvironmentObject var model: AppModel
+    @State private var checking = false
+    @State private var reinstalling = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button(checking ? "점검 중…" : "지금 점검") {
+                    checking = true
+                    Task { await model.runDoctor(); checking = false }
+                }
+                .disabled(checking)
+                Button(reinstalling ? "업데이트 중…" : "엔진 업데이트") {
+                    reinstalling = true
+                    Task { _ = await model.installEngine(withModel: false); reinstalling = false }
+                }
+                .disabled(reinstalling || model.isBusy)
+                Spacer()
+                Button("로그 파일 열기") { NSWorkspace.shared.open(Paths.log) }
+            }
+            if let report = model.report {
+                GroupBox {
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(report.checks) { c in
+                            HStack(alignment: .top) {
+                                Image(systemName: c.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                    .foregroundStyle(c.ok ? .green : .red)
+                                VStack(alignment: .leading) {
+                                    Text(c.label)
+                                    if !c.hint.isEmpty { Text(c.hint).font(.caption).foregroundStyle(.secondary) }
+                                }
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            Text("실행 로그").font(.caption).foregroundStyle(.secondary)
+            LogView().clipShape(RoundedRectangle(cornerRadius: 6))
+            HStack {
+                Spacer()
+                Button("설정 마법사 다시 실행") { model.setupDone = false }
+            }
+        }
+    }
+}
