@@ -19,7 +19,7 @@ def rclone_path():
 
 def md_to_html(md_text: str, title: str) -> str:
     import markdown
-    body = markdown.markdown(md_text, extensions=["tables", "sane_lists"])
+    body = markdown.markdown(md_text, extensions=["tables", "sane_lists", "nl2br"])
     return HTML_TEMPLATE.format(title=title, body=body)
 
 

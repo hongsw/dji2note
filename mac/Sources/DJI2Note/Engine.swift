@@ -127,7 +127,7 @@ enum Engine {
                 try await installUV()
             }
             log("② DJI2Note 엔진 설치 중… (처음엔 Python과 라이브러리를 받느라 몇 분 걸립니다)")
-            let r = await run(Paths.uv, ["tool", "install", "--force", "--python", "3.12", packageURL], onLine: log)
+            let r = await run(Paths.uv, ["tool", "install", "--force", "--refresh-package", "dji2note", "--python", "3.12", packageURL], onLine: log)
             guard r.ok, isInstalled else { log("엔진 설치 실패"); return false }
             log("③ ffmpeg·rclone 준비 중…")
             var args = ["setup-tools"]
