@@ -30,6 +30,17 @@ struct EngineConfig: Codable, Equatable {
     }
 }
 
+/// DJI 안의 처리할 녹음이 Mac(recordings 폴더)에 얼마나 복사됐는지
+struct BackupState: Equatable {
+    var filesTotal = 0
+    var filesCopied = 0
+    var bytesTotal: Int64 = 0
+    var bytesCopied: Int64 = 0
+    /// 처리할 녹음이 모두 Mac에 있음 → 마이크를 분리해도 됨
+    var safeToRemove: Bool { filesCopied >= filesTotal }
+    var fraction: Double { bytesTotal > 0 ? Double(bytesCopied) / Double(bytesTotal) : 1 }
+}
+
 /// 연결된 DJI 장치(볼륨) 정보
 struct DeviceInfo: Equatable {
     let name: String
@@ -84,6 +95,8 @@ final class AppModel: ObservableObject {
     @Published var connected: [DJIRecording] = []
     @Published var driveRemotes: [String] = []
     @Published var device: DeviceInfo?
+    @Published var backup = BackupState()
+    private var backupTimer: Timer?
 
     @Published var isBusy = false
     @Published var statusText = "대기 중"
@@ -143,6 +156,7 @@ final class AppModel: ObservableObject {
         await refreshHistory()
         driveRemotes = await Engine.json(["drive", "remotes"], as: [String].self) ?? []
         connected = await Engine.json(["scan", "--json"], as: [DJIRecording].self) ?? []
+        refreshBackup()
         attachIfEngineRunning()
     }
 
@@ -151,10 +165,48 @@ final class AppModel: ObservableObject {
         let keys: [URLResourceKey] = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityKey]
         let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys,
                                                             options: [.skipHiddenVolumes]) ?? []
+        defer { updateBackupTimer() }
         guard let v = volumes.first(where: { $0.path.hasPrefix("/Volumes/") && Self.looksLikeDJI($0) }),
               let r = try? v.resourceValues(forKeys: Set(keys)) else { device = nil; return }
         device = DeviceInfo(name: r.volumeName ?? v.lastPathComponent, url: v,
                             total: Int64(r.volumeTotalCapacity ?? 0), free: Int64(r.volumeAvailableCapacity ?? 0))
+    }
+
+    /// 처리할 녹음(완료·대화 없음 제외)이 Mac에 같은 크기로 복사됐는지 파일 크기로 확인
+    func refreshBackup() {
+        guard device != nil else { backup = BackupState(); return }
+        let dir = URL(filePath: config.output_dir.replacingOccurrences(of: "~", with: Paths.home.path))
+            .appending(path: "recordings")
+        let fm = FileManager.default
+        var b = BackupState()
+        for rec in connected where rec.status != "done" && rec.status != "no_speech" {
+            let size = Self.fileSize(rec.path, fm)
+            guard size > 0 else { continue }
+            let local = Self.fileSize(dir.appending(path: rec.name).path, fm)
+            b.filesTotal += 1
+            b.bytesTotal += size
+            b.bytesCopied += min(local, size)
+            if local == size { b.filesCopied += 1 }
+        }
+        if b != backup { backup = b }
+    }
+
+    nonisolated static func fileSize(_ path: String, _ fm: FileManager) -> Int64 {
+        guard let attrs = try? fm.attributesOfItem(atPath: path), let n = attrs[.size] as? NSNumber else { return 0 }
+        return n.int64Value
+    }
+
+    /// 장치가 연결돼 있는 동안 1초마다 복사 상태 갱신
+    private func updateBackupTimer() {
+        if device != nil, backupTimer == nil {
+            backupTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+                Task { @MainActor in self?.refreshBackup() }
+            }
+        } else if device == nil {
+            backupTimer?.invalidate()
+            backupTimer = nil
+            backup = BackupState()
+        }
     }
 
     /// DJI 안전하게 꺼내기
