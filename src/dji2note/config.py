@@ -19,7 +19,9 @@ class Config:
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
     # llm_backend: "claude-cli" | "anthropic-api" | "none"
     llm_backend: str = "none"
-    llm_model: str = "claude-sonnet-5"
+    llm_model: str = "claude-sonnet-5"          # 요약
+    llm_fast_model: str = "claude-sonnet-5"     # 대본 교정(출력이 길어 빠른 모델) — 비우면 llm_model 사용
+    llm_parallel: int = 4                       # 대본 조각 동시 처리 수
     anthropic_api_key: str = ""
     # upload: "none" | "rclone"
     upload: str = "none"

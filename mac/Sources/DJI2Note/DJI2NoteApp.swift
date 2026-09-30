@@ -42,6 +42,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// dji2note://mounted — 볼륨 마운트 때 launchd 에이전트가 보냄
     func application(_ application: NSApplication, open urls: [URL]) {
+        if urls.contains(where: { $0.host == "process-all" }) {
+            Task { @MainActor in AppModel.shared.processAll() }  // 자동화·스크립트용
+            return
+        }
         guard urls.contains(where: { $0.host == "mounted" }) else { return }
         let justNow = Date().timeIntervalSince(launchedAt) < 10
         Task { @MainActor in AppModel.shared.checkMountedVolumes(launchedJustNow: justNow) }

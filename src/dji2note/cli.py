@@ -256,8 +256,13 @@ def cmd_config(args):
             key, _, value = pair.partition("=")
             if key not in fields or key == "extra":
                 sys.exit(f"알 수 없는 설정: {key}")
-            setattr(cfg, key, value.lower() in ("1", "true", "yes") if fields[key].type is bool
-                    or fields[key].type == "bool" else value)
+            typ = fields[key].type
+            if typ in (bool, "bool"):
+                setattr(cfg, key, value.lower() in ("1", "true", "yes"))
+            elif typ in (int, "int"):
+                setattr(cfg, key, int(value))
+            else:
+                setattr(cfg, key, value)
         config.save(cfg)
     data = {k: v for k, v in cfg.__dict__.items() if k != "extra"}
     data["anthropic_api_key"] = "***" if cfg.anthropic_api_key else ""

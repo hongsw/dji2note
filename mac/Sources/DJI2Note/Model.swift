@@ -231,6 +231,14 @@ final class AppModel: ObservableObject {
         if let m = line.firstMatch(of: /복사 \[(\d+)\/(\d+)\]/) {
             statusText = "DJI에서 복사 중 (\(m.1)/\(m.2))"
             progress = (Double(m.1) ?? 0) / max(Double(m.2) ?? 1, 1)
+        } else if let m = line.firstMatch(of: /AI 정리 \[(\d+)\/(\d+)\]/) {
+            statusText = "AI가 대본 정리 중\(position) — 조각 \(m.1)/\(m.2)"
+            progress = (Double(m.1) ?? 0) / max(Double(m.2) ?? 1, 1)
+        } else if line.contains("요약 작성 중") {
+            statusText = "AI가 요약 작성 중\(position)…"
+            progress = nil
+        } else if line.contains("받아쓰기 결과 재사용") {
+            statusText = "이전 받아쓰기 결과로 이어서 처리\(position)"
         } else if line.contains("복사 완료") {
             statusText = "복사 완료 — DJI를 분리해도 됩니다"
             progress = nil

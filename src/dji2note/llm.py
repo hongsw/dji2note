@@ -7,7 +7,7 @@ import tempfile
 
 from .config import Config
 
-CHUNK_SEC = 20 * 60  # 긴 녹음은 20분 단위로 나눠 교정(출력 길이 제한 대비)
+CHUNK_SEC = 10 * 60  # 대본을 10분 조각으로 나눠 동시에 교정(조각이 작을수록 빨리 끝남)
 
 TRANSCRIPT_PROMPT = """아래는 무선 마이크(송신기 1개, 옷에 부착)로 녹음한 대화를 Whisper로 받아쓴 원문이다.
 각 줄 형식: [시각] 음량dB | 텍스트
@@ -63,14 +63,15 @@ def claude_cli_path():
     return shutil.which("claude")
 
 
-def ask(cfg: Config, prompt: str) -> str:
+def ask(cfg: Config, prompt: str, model: str | None = None) -> str:
+    model = model or cfg.llm_model
     if cfg.llm_backend == "claude-cli":
         cli = claude_cli_path()
         if not cli:
             raise RuntimeError("claude CLI를 찾을 수 없습니다")
         cmd = [cli, "-p", "--output-format", "text", "--tools", "", "--no-session-persistence"]
-        if cfg.llm_model:
-            cmd += ["--model", cfg.llm_model]
+        if model:
+            cmd += ["--model", model]
         import getpass
         env = {**os.environ, "USER": os.environ.get("USER") or getpass.getuser()}  # 로그인 확인에 필요
         out = subprocess.run(cmd, input=prompt, capture_output=True, text=True, env=env,
@@ -81,7 +82,7 @@ def ask(cfg: Config, prompt: str) -> str:
     elif cfg.llm_backend == "anthropic-api":
         import anthropic
         client = anthropic.Anthropic(api_key=cfg.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"))
-        with client.messages.stream(model=cfg.llm_model, max_tokens=32000,
+        with client.messages.stream(model=model, max_tokens=32000,
                                     messages=[{"role": "user", "content": prompt}]) as s:
             msg = s.get_final_message()
         text = "".join(b.text for b in msg.content if b.type == "text")
@@ -111,8 +112,22 @@ def _chunks(raw: str):
         yield "\n".join(chunk)
 
 
-def make_transcript(cfg: Config, raw: str) -> str:
-    return "\n\n".join(ask(cfg, TRANSCRIPT_PROMPT.format(raw=c)).strip() for c in _chunks(raw)) + "\n"
+def make_transcript(cfg: Config, raw: str, log=print) -> str:
+    """조각을 동시에 교정한다. 순서는 원래대로 이어 붙인다."""
+    from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    chunks = list(_chunks(raw))
+    model = cfg.llm_fast_model or cfg.llm_model
+    results: list[str] = [""] * len(chunks)
+    done = 0
+    log(f"AI 정리 [0/{len(chunks)}] ({model}, 동시 {cfg.llm_parallel}개)")
+    with ThreadPoolExecutor(max_workers=max(1, cfg.llm_parallel)) as pool:
+        futures = {pool.submit(ask, cfg, TRANSCRIPT_PROMPT.format(raw=c), model): i for i, c in enumerate(chunks)}
+        for f in as_completed(futures):
+            results[futures[f]] = f.result().strip()
+            done += 1
+            log(f"AI 정리 [{done}/{len(chunks)}]")
+    return "\n\n".join(results) + "\n"
 
 
 def make_summary(cfg: Config, title: str, transcript: str) -> str:

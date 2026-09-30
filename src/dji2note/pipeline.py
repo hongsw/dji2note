@@ -110,9 +110,15 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
     pos = f" [{index[0]}/{index[1]}]" if index else ""
     log(f"처리 시작{pos}: {folder.name} (파일 {len(group)}개, {total / 60:.1f}분)")
 
-    inputs = [copy_local(cfg, r) if copy else r["src"] for r in group]
-    with tempfile.TemporaryDirectory() as tmp:
-        raw = transcribe.transcribe(inputs, Path(tmp), cfg.whisper_model, cfg.language)
+    cached = folder / "raw_whisper.txt"
+    if cached.exists() and cached.stat().st_size > 0:
+        # 중간에 멈췄던 회의: 받아쓰기 결과를 재사용하고 AI 단계부터 이어서
+        log(f"받아쓰기 결과 재사용: {cached.name}")
+        raw = cached.read_text().strip()
+    else:
+        inputs = [copy_local(cfg, r) if copy else r["src"] for r in group]
+        with tempfile.TemporaryDirectory() as tmp:
+            raw = transcribe.transcribe(inputs, Path(tmp), cfg.whisper_model, cfg.language)
     if len(re.sub(r"^\[.*?\|", "", raw, flags=re.M).strip()) < MIN_TEXT_CHARS:
         log(f"대화 없음: {folder.name}")
         return {"status": "no_speech"}
@@ -123,9 +129,10 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
         body = transcribe.label_by_loudness(raw)
         (folder / "transcript.md").write_text(transcript_doc(title, body, "none"))
     else:
-        body = llm.make_transcript(cfg, raw)
+        body = llm.make_transcript(cfg, raw, log=log)
         transcript = transcript_doc(title, body, cfg.llm_backend)
         (folder / "transcript.md").write_text(transcript)
+        log(f"요약 작성 중 ({cfg.llm_model})")
         (folder / "summary.md").write_text(llm.make_summary(cfg, title, transcript))
     log(f"저장: {folder}")
 
