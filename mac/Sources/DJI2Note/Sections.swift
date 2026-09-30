@@ -143,7 +143,7 @@ struct AISection: View {
         case "baryon":
             LabeledContent("API 주소") {
                 HStack {
-                    TextField("https://…", text: $baryonURL).textFieldStyle(.roundedBorder)
+                    TextField("https://…", text: $baryonURL).textFieldStyle(.roundedBorder).labelsHidden()
                     Button("저장") { let u = baryonURL; Task { await model.set(["baryon_api_url": u]) } }
                         .disabled(baryonURL.isEmpty || baryonURL == (model.config.baryon_api_url ?? ""))
                 }
@@ -163,7 +163,7 @@ struct AISection: View {
             LabeledContent("API 키") {
                 HStack {
                     SecureField(saved ? "저장됨 (바꾸려면 입력)" : placeholder, text: $key)
-                        .textFieldStyle(.roundedBorder)
+                        .textFieldStyle(.roundedBorder).labelsHidden()
                     Button("저장") { let k = key; Task { await model.set([configKey: k]); key = "" } }
                         .disabled(key.isEmpty)
                 }
@@ -182,7 +182,7 @@ struct AISection: View {
                 TextField(backend == "codex-cli" ? "비우면 기본 모델" : "모델 이름", text: Binding(
                     get: { value },
                     set: { v in Task { await model.set([key: v]) } }))
-                    .textFieldStyle(.roundedBorder)
+                    .textFieldStyle(.roundedBorder).labelsHidden()
                 if !presets.isEmpty {
                     Menu {
                         ForEach(presets, id: \.self) { m in Button(m) { Task { await model.set([key: m]) } } }
@@ -254,7 +254,7 @@ struct DriveSection: View {
                 LabeledContent("Drive 폴더") {
                     HStack {
                         TextField("dji2note", text: $folder)
-                            .textFieldStyle(.roundedBorder)
+                            .textFieldStyle(.roundedBorder).labelsHidden()
                             .onSubmit(saveFolder)
                         Button("저장", action: saveFolder).disabled(folder == model.config.drive_folder)
                     }
@@ -353,15 +353,16 @@ struct NotionSection: View {
 
             LabeledContent("통합 토큰") {
                 HStack {
-                    SecureField((model.config.notion_token ?? "").isEmpty ? "ntn_…" : "저장됨 (바꾸려면 입력)", text: $token)
-                        .textFieldStyle(.roundedBorder)
+                    SecureField("통합 토큰", text: $token,
+                                prompt: Text((model.config.notion_token ?? "").isEmpty ? "ntn_… 붙여 넣기" : "저장됨 (바꾸려면 입력)"))
+                        .textFieldStyle(.roundedBorder).labelsHidden()
                     Button("저장") { let t = token; Task { await model.set(["notion_token": t]); token = ""; await test() } }
                         .disabled(token.isEmpty)
                 }
             }
             LabeledContent("회의록 페이지") {
                 HStack {
-                    TextField("https://www.notion.so/…", text: $parent).textFieldStyle(.roundedBorder)
+                    TextField("회의록 페이지", text: $parent, prompt: Text("https://www.notion.so/… 페이지 링크")).textFieldStyle(.roundedBorder).labelsHidden()
                     Button("저장") { let p = parent; Task { await model.set(["notion_parent": p]); await test() } }
                         .disabled(parent.isEmpty || parent == (model.config.notion_parent ?? ""))
                 }
