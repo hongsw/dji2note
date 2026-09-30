@@ -87,6 +87,7 @@ final class AppModel: ObservableObject {
 
     @Published var isBusy = false
     @Published var statusText = "대기 중"
+    @Published var currentItem = ""  // 지금 처리 중인 회의 이름
     @Published var progress: Double?
     @Published var logLines: [String] = []
 
@@ -214,9 +215,12 @@ final class AppModel: ObservableObject {
 
     func refreshHistory() async {
         let dict = await Engine.json(["list", "--json"], as: [String: HistoryEntry].self) ?? [:]
+        // 30분 단위로 나뉜 파일들은 같은 회의록 폴더를 가리키므로 폴더 기준으로 한 줄만
+        var seen = Set<String>()
         history = dict.map { HistoryItem(name: $0.key, entry: $0.value) }
             .filter { $0.entry.status == "done" }
-            .sorted { ($0.entry.at ?? "") > ($1.entry.at ?? "") }
+            .sorted { ($0.entry.notes ?? "") > ($1.entry.notes ?? "") }
+            .filter { seen.insert($0.entry.notes ?? $0.name).inserted }
     }
 
     func runDoctor() async {
@@ -341,7 +345,8 @@ final class AppModel: ObservableObject {
             if let m = rest.firstMatch(of: /\[(\d+)\/(\d+)\]/) { position = " (\(m.1)/\(m.2))" } else { position = "" }
             let name = rest.split(separator: ":").dropFirst().first?.trimmingCharacters(in: .whitespaces)
                 .split(separator: " ").first.map(String.init) ?? ""
-            statusText = "받아쓰는 중\(position): \(name)"
+            statusText = "받아쓰는 중\(position)"
+            currentItem = name
             progress = 0
         } else if line.contains("저장: ") {
             statusText = (config.upload == "rclone" ? "Google Drive에 올리는 중" : "저장 완료") + position
@@ -351,6 +356,7 @@ final class AppModel: ObservableObject {
         } else if line.contains("대화 없음") {
             statusText = "대화가 없는 녹음이라 건너뜀\(position)"
         } else if line.contains("전체 완료") {
+            currentItem = ""
             statusText = line.components(separatedBy: "전체 완료").last.map { "모두 끝났습니다" + $0 } ?? "모두 끝났습니다"
         } else if line.contains("실패") {
             statusText = "일부 실패 — 로그를 확인하세요"

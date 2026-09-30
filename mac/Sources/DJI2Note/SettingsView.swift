@@ -37,7 +37,10 @@ struct HistoryTab: View {
             DeviceCard()
             HStack {
                 VStack(alignment: .leading) {
-                    Text(model.statusText).font(.headline)
+                    Text(model.statusText).font(.headline).lineLimit(1)
+                    if model.isBusy && !model.currentItem.isEmpty {
+                        Text(model.currentItem).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
                     if let p = model.progress { ProgressView(value: p).frame(width: 260) }
                 }
                 Spacer()

@@ -83,6 +83,9 @@ struct MenuPanel: View {
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.statusText).font(.callout)
+                if model.isBusy && !model.currentItem.isEmpty {
+                    Text(model.currentItem).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                }
                 if let p = model.progress {
                     ProgressView(value: p)
                 }
