@@ -1,6 +1,7 @@
 """dji2note 명령행 도구."""
 import argparse
 import json
+from datetime import datetime
 import platform
 import shutil
 import subprocess
@@ -188,7 +189,7 @@ def cmd_doctor(args):
 
 # ── 나머지 명령 ───────────────────────────────────────────────────────
 def cmd_run(args):
-    pipeline.run(config.load(), dry_run=args.dry_run, include_seen=args.all)
+    pipeline.run(config.load(), dry_run=args.dry_run, include_seen=args.all, names=args.names)
 
 
 def cmd_process(args):
@@ -201,9 +202,13 @@ def cmd_process(args):
     recs = [pipeline.recording_info(p) | {"duration": pipeline.duration(p)} for p in paths]
     recs.sort(key=lambda r: r["start"])
     groups = [recs] if args.join else [[r] for r in recs]
-    for g in groups:
-        res = pipeline.process_session(cfg, g, copy=False)
-        print(res)
+    state = config.load_state()
+    for i, g in enumerate(groups, 1):
+        res = pipeline.process_session(cfg, g, copy=False, index=(i, len(groups)) if len(groups) > 1 else None)
+        for r in g:  # 처리 기록에 남겨 목록에서 '완료'로 보이게
+            state[r["name"]] = {**res, "at": datetime.now().isoformat(timespec="seconds")}
+        config.save_state(state)
+        print(json.dumps(res, ensure_ascii=False))
 
 
 def cmd_upload(args):
@@ -330,6 +335,7 @@ def main():
     p = sub.add_parser("run", help="연결된 DJI의 새 녹음 처리")
     p.add_argument("--dry-run", action="store_true", help="처리할 대상만 보여 줌")
     p.add_argument("--all", action="store_true", help="건너뛰기로 표시한 기존 녹음도 처리")
+    p.add_argument("--names", nargs="+", help="이 파일들만 처리 (상태 무관)")
     p.set_defaults(fn=cmd_run)
     p = sub.add_parser("process", help="오디오 파일을 직접 처리")
     p.add_argument("files", nargs="+")

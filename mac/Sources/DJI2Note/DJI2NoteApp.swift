@@ -99,10 +99,20 @@ struct MenuPanel: View {
                     Label("연결된 DJI에 새 녹음 \(newCount)개", systemImage: "mic.badge.plus")
                         .font(.callout)
                 }
+                if model.pendingCount > 0 {
+                    Button {
+                        model.processAll()
+                    } label: {
+                        Label("남은 녹음 \(model.pendingCount)개 모두 처리", systemImage: "play.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(model.isBusy)
+                }
                 HStack {
                     Button {
                         model.processConnected()
-                    } label: { Label("지금 처리", systemImage: "play.fill") }
+                    } label: { Label("새 녹음 처리", systemImage: "arrow.clockwise") }
                     Button {
                         model.chooseAndProcessFiles()
                     } label: { Label("파일 처리…", systemImage: "doc.badge.plus") }

@@ -46,8 +46,14 @@ struct HistoryTab: View {
                 .labelsHidden()
                 .fixedSize()
                 .help("DJI를 연결했을 때 할 일")
-                Button { model.processConnected() } label: { Label("DJI 녹음 처리", systemImage: "play.fill") }
+                if model.pendingCount > 0 {
+                    Button { model.processAll() } label: {
+                        Label("모두 처리 (\(model.pendingCount))", systemImage: "play.fill")
+                    }
+                    .buttonStyle(.borderedProminent)
                     .disabled(model.isBusy)
+                    .help("새 녹음과 건너뛴 녹음을 전부: 먼저 Mac으로 복사한 뒤 최신 회의부터 차례로 처리")
+                }
                 Button { model.chooseAndProcessFiles() } label: { Label("파일 처리…", systemImage: "doc.badge.plus") }
                     .disabled(model.isBusy)
             }
@@ -62,7 +68,7 @@ struct HistoryTab: View {
                             Spacer()
                             StatusBadge(status: rec.status)
                             if rec.status != "done" {
-                                Button("처리") { model.processFiles([URL(filePath: rec.path)], join: false) }
+                                Button("처리") { model.processNames([rec.name]) }
                                     .disabled(model.isBusy)
                             }
                         }

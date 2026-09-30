@@ -161,6 +161,18 @@ final class AppModel: ObservableObject {
 
     // MARK: 처리
 
+    /// 연결된 DJI에서 아직 처리 안 한 녹음(새 녹음 + 건너뛴 녹음)
+    var pendingCount: Int { connected.filter { $0.status == "new" || $0.status == "seen" }.count }
+
+    /// 건너뛴 것까지 전부 한 번에: 먼저 모두 복사 → 최신 회의부터 차례로 처리
+    func processAll() {
+        runPipeline(["run", "--all"], title: "모두 처리")
+    }
+
+    func processNames(_ names: [String]) {
+        runPipeline(["run", "--names"] + names, title: "선택한 녹음 처리")
+    }
+
     func processConnected() {
         runPipeline(["run"], title: "DJI 녹음 처리")
     }
@@ -187,8 +199,13 @@ final class AppModel: ObservableObject {
         guard !isBusy, engineInstalled else { return }
         isBusy = true
         progress = nil
+        position = ""
         statusText = "\(title) 시작"
+        // 몇 시간짜리 일괄 처리 중에 Mac이 잠들지 않도록
+        let activity = ProcessInfo.processInfo.beginActivity(
+            options: [.userInitiated, .idleSystemSleepDisabled], reason: "DJI2Note 회의록 처리")
         Task {
+            defer { ProcessInfo.processInfo.endActivity(activity) }
             let r = await Engine.cli(args) { [weak self] line in
                 Task { @MainActor in self?.handle(line) }
             }
@@ -201,23 +218,38 @@ final class AppModel: ObservableObject {
     }
 
     /// 파이썬 로그 한 줄을 사람이 읽을 상태로 바꾼다.
+    /// 일괄 처리 중 현재 위치 "(2/5)"
+    private var position = ""
+
     private func handle(_ line: String) {
         if let m = line.firstMatch(of: /(\d{1,3})%\|/), let pct = Double(m.1) {
             progress = pct / 100
-            statusText = pct >= 100 ? "AI가 화자 분리·요약하는 중…" : "받아쓰는 중… \(Int(pct))%"
+            statusText = pct >= 100 ? "AI가 화자 분리·요약하는 중\(position)…" : "받아쓰는 중\(position) \(Int(pct))%"
             return
         }
         appendLog(line)
-        if let r = line.range(of: "처리 시작: ") {
-            statusText = "받아쓰는 중: " + line[r.upperBound...].split(separator: " ").first.map(String.init)!
+        if let m = line.firstMatch(of: /복사 \[(\d+)\/(\d+)\]/) {
+            statusText = "DJI에서 복사 중 (\(m.1)/\(m.2))"
+            progress = (Double(m.1) ?? 0) / max(Double(m.2) ?? 1, 1)
+        } else if line.contains("복사 완료") {
+            statusText = "복사 완료 — DJI를 분리해도 됩니다"
+            progress = nil
+        } else if let r = line.range(of: "처리 시작") {
+            let rest = line[r.upperBound...]
+            if let m = rest.firstMatch(of: /\[(\d+)\/(\d+)\]/) { position = " (\(m.1)/\(m.2))" } else { position = "" }
+            let name = rest.split(separator: ":").dropFirst().first?.trimmingCharacters(in: .whitespaces)
+                .split(separator: " ").first.map(String.init) ?? ""
+            statusText = "받아쓰는 중\(position): \(name)"
             progress = 0
         } else if line.contains("저장: ") {
-            statusText = config.upload == "rclone" ? "Google Drive에 올리는 중…" : "저장 완료"
+            statusText = (config.upload == "rclone" ? "Google Drive에 올리는 중" : "저장 완료") + position
             progress = nil
         } else if line.contains("업로드: ") {
-            statusText = "완료 — Google Drive에 올렸습니다"
+            statusText = "올리기 완료\(position)"
         } else if line.contains("대화 없음") {
-            statusText = "대화가 없는 녹음이라 건너뜀"
+            statusText = "대화가 없는 녹음이라 건너뜀\(position)"
+        } else if line.contains("전체 완료") {
+            statusText = line.components(separatedBy: "전체 완료").last.map { "모두 끝났습니다" + $0 } ?? "모두 끝났습니다"
         } else if line.contains("실패") {
             statusText = "일부 실패 — 로그를 확인하세요"
         }

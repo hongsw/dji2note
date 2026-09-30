@@ -101,13 +101,14 @@ def transcript_doc(title: str, body: str, backend: str) -> str:
             f"{body.strip()}\n")
 
 
-def process_session(cfg: Config, group: list[dict], copy: bool = True) -> dict:
+def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tuple[int, int] | None = None) -> dict:
     first, last = group[0], group[-1]
     total = sum(r["duration"] for r in group)
     label = first["label"] if len(group) == 1 else f"{first['label']}-{last['label']}"
     folder = cfg.notes_dir / f"{first['start']:%Y-%m-%d_%H%M}_{label}"
     title = f"{first['start']:%Y-%m-%d %H:%M} ({int(total // 60)}분 {int(total % 60)}초)"
-    log(f"처리 시작: {folder.name} (파일 {len(group)}개, {total / 60:.1f}분)")
+    pos = f" [{index[0]}/{index[1]}]" if index else ""
+    log(f"처리 시작{pos}: {folder.name} (파일 {len(group)}개, {total / 60:.1f}분)")
 
     inputs = [copy_local(cfg, r) if copy else r["src"] for r in group]
     with tempfile.TemporaryDirectory() as tmp:
@@ -136,8 +137,12 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True) -> dict:
     return result
 
 
-def run(cfg: Config, dry_run: bool = False, include_seen: bool = False):
-    """연결된 DJI의 새 녹음을 처리한다. launchd가 볼륨 마운트 때마다 호출."""
+def run(cfg: Config, dry_run: bool = False, include_seen: bool = False, names: list[str] | None = None):
+    """연결된 DJI의 녹음을 한 번에 처리한다.
+
+    기본은 새 녹음만, include_seen이면 건너뛰기 표시한 것까지, names를 주면 그 파일들만.
+    먼저 전부 Mac으로 복사한 뒤 처리하므로, 복사가 끝나면 DJI를 분리해도 된다.
+    """
     config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
     lock = open(config.LOCK_FILE, "w")
     try:
@@ -148,38 +153,75 @@ def run(cfg: Config, dry_run: bool = False, include_seen: bool = False):
 
     time.sleep(0 if dry_run else 3)  # 마운트 직후 안정화
     state = config.load_state()
-    skip = {"done", "no_speech"} | (set() if include_seen else {"seen"})
-    recs = [r for r in find_dji_recordings() if state.get(r["name"], {}).get("status") not in skip]
-    for r in recs:
-        r["duration"] = duration(r["src"])
-    recs = [r for r in recs if r["duration"] > 5]  # 0바이트·초단편 제외
+    if names:
+        wanted = set(names)
+        recs = [r for r in find_dji_recordings() if r["name"] in wanted]
+    else:
+        skip = {"done", "no_speech"} | (set() if include_seen else {"seen"})
+        recs = [r for r in find_dji_recordings() if state.get(r["name"], {}).get("status") not in skip]
+    now = datetime.now().isoformat(timespec="seconds")
+
+    def mark_too_short(items):
+        # 너무 짧은 파일도 기록해 두어야 '남은 녹음' 수가 0이 된다
+        for r in items:
+            state[r["name"]] = {"status": "no_speech", "reason": "too_short", "at": now}
+
+    if not dry_run:
+        mark_too_short([r for r in recs if r["src"].stat().st_size <= 64 * 1024])
+    recs = [r for r in recs if r["src"].stat().st_size > 64 * 1024]  # 0바이트·초단편 제외
     if not recs:
+        if not dry_run:
+            config.save_state(state)
         if dry_run:
-            print("새 녹음이 없습니다.")
+            print("처리할 녹음이 없습니다.")
         return
-    groups = group_sessions(recs)
-    log(f"새 녹음 {len(recs)}개 → 세션 {len(groups)}개")
     if dry_run:
-        for g in groups:
+        for r in recs:
+            r["duration"] = duration(r["src"])
+        for g in group_sessions(recs):
             print(f"  {g[0]['start']:%Y-%m-%d %H:%M}  {sum(r['duration'] for r in g) / 60:5.1f}분  "
                   + ", ".join(r["name"] for r in g))
         return
 
-    notify(cfg, f"새 녹음 {len(groups)}건 처리 시작")
-    ok = 0
-    for g in groups:
+    # 1) 전부 먼저 복사 — 긴 일괄 처리 중에 DJI가 빠지거나 연결이 끊겨도 안전
+    for i, r in enumerate(recs, 1):
+        log(f"복사 [{i}/{len(recs)}]: {r['name']}")
         try:
-            res = process_session(cfg, g)
+            r["src"] = copy_local(cfg, r)
+        except Exception as e:
+            log(f"실패: {r['name']}: {e}")
+            r["src"] = None
+    recs = [r for r in recs if r["src"]]
+    log("복사 완료 — 이제 DJI를 분리해도 됩니다")
+    for r in recs:
+        r["duration"] = duration(r["src"])
+    mark_too_short([r for r in recs if r["duration"] <= 5])
+    config.save_state(state)
+    recs = [r for r in recs if r["duration"] > 5]
+    if not recs:
+        log("전체 완료: 처리할 녹음이 없습니다 (너무 짧은 파일만 있음)")
+        return
+
+    # 2) 최신 녹음부터 처리 — 밀린 녹음이 많아도 방금 한 회의가 먼저 나온다
+    groups = list(reversed(group_sessions(recs)))
+    log(f"녹음 {len(recs)}개 → 회의 {len(groups)}건 처리")
+    notify(cfg, f"회의 {len(groups)}건 처리 시작 — DJI를 분리해도 됩니다")
+    ok = failed = 0
+    for i, g in enumerate(groups, 1):
+        try:
+            res = process_session(cfg, g, copy=False, index=(i, len(groups)))
             ok += res["status"] == "done"
-        except Exception as e:  # 한 세션 실패가 나머지를 막지 않도록
+        except Exception as e:  # 한 회의 실패가 나머지를 막지 않도록 (기록이 안 남아 다음에 재시도됨)
+            failed += 1
             log(f"실패: {g[0]['name']}: {e}")
-            notify(cfg, f"처리 실패: {g[0]['name']}")
             continue
         for r in g:
             state[r["name"]] = {**res, "at": datetime.now().isoformat(timespec="seconds")}
         config.save_state(state)
-    if ok:
-        notify(cfg, f"{ok}건 정리 완료" + (" · Google Drive 업로드됨" if cfg.upload == "rclone" else ""))
+    log(f"전체 완료: 성공 {ok}건" + (f", 실패 {failed}건" if failed else ""))
+    if ok or failed:
+        notify(cfg, f"{ok}건 정리 완료" + (f" · {failed}건 실패" if failed else "")
+               + (" · Google Drive 업로드됨" if ok and cfg.upload == "rclone" else ""))
 
 
 def mark_seen(names: list[str]):
