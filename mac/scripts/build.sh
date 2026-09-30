@@ -15,6 +15,10 @@ echo "==> 컴파일 ($VERSION, build $BUILD)"
 swift build -c release --arch arm64
 cp .build/arm64-apple-macosx/release/DJI2Note "$APP/Contents/MacOS/DJI2Note"
 sed -e "s/__VERSION__/$VERSION/" -e "s/__BUILD__/$BUILD/" Resources/Info.plist > "$APP/Contents/Info.plist"
+# 볼륨 마운트 감지 에이전트(앱이 꺼져 있어도 DJI 연결 시 실행)
+clang -O2 -arch arm64 -mmacosx-version-min=14.0 -o "$APP/Contents/MacOS/DJI2NoteMountHelper" Resources/mount-helper.c
+mkdir -p "$APP/Contents/Library/LaunchAgents"
+cp Resources/io.dji2note.mount.plist "$APP/Contents/Library/LaunchAgents/"
 
 echo "==> 아이콘"
 ICONSET="$OUT/AppIcon.iconset"; mkdir -p "$ICONSET"

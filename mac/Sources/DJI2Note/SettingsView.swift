@@ -40,6 +40,12 @@ struct HistoryTab: View {
                     if let p = model.progress { ProgressView(value: p).frame(width: 260) }
                 }
                 Spacer()
+                Picker("", selection: $model.connectAction) {
+                    ForEach(AppModel.ConnectAction.allCases) { Text($0.title).tag($0) }
+                }
+                .labelsHidden()
+                .fixedSize()
+                .help("DJI를 연결했을 때 할 일")
                 Button { model.processConnected() } label: { Label("DJI 녹음 처리", systemImage: "play.fill") }
                     .disabled(model.isBusy)
                 Button { model.chooseAndProcessFiles() } label: { Label("파일 처리…", systemImage: "doc.badge.plus") }
@@ -48,7 +54,7 @@ struct HistoryTab: View {
 
             if !model.connected.isEmpty {
                 GroupBox("연결된 DJI 녹음") {
-                    List(model.connected) { rec in
+                    List(Array(model.connected.reversed())) { rec in
                         HStack {
                             Text(rec.start.prefix(16).replacingOccurrences(of: "T", with: " "))
                                 .monospacedDigit()

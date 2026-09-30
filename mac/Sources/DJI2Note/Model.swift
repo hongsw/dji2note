@@ -70,14 +70,41 @@ final class AppModel: ObservableObject {
     @Published var setupDone = UserDefaults.standard.bool(forKey: "setupDone") {
         didSet { UserDefaults.standard.set(setupDone, forKey: "setupDone") }
     }
-    @Published var autoProcess = UserDefaults.standard.object(forKey: "autoProcess") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(autoProcess, forKey: "autoProcess") }
+    /// DJI를 연결했을 때 할 일
+    enum ConnectAction: String, CaseIterable, Identifiable {
+        case showAndProcess, showOnly, silentProcess
+        var id: String { rawValue }
+        var title: String {
+            switch self {
+            case .showAndProcess: "창 띄우고 바로 자동 처리"
+            case .showOnly: "창만 띄우기 (처리는 직접)"
+            case .silentProcess: "창 없이 바로 자동 처리 (끝나면 알림)"
+            }
+        }
+        var short: String {
+            switch self {
+            case .showAndProcess: "연결 시 자동 처리"
+            case .showOnly: "연결 시 창만"
+            case .silentProcess: "연결 시 조용히 처리"
+            }
+        }
+    }
+
+    @Published var connectAction: ConnectAction = {
+        if let raw = UserDefaults.standard.string(forKey: "connectAction"), let a = ConnectAction(rawValue: raw) { return a }
+        // 이전 버전의 "자동 처리" 스위치를 이어받음
+        return (UserDefaults.standard.object(forKey: "autoProcess") as? Bool ?? true) ? .showAndProcess : .showOnly
+    }() {
+        didSet { UserDefaults.standard.set(connectAction.rawValue, forKey: "connectAction") }
     }
 
     private var mountObserver: NSObjectProtocol?
 
+    static let shared = AppModel()
+
     init() {
         startMountWatcher()
+        registerMountAgent()
         Task { await refresh() }
     }
 
@@ -214,14 +241,62 @@ final class AppModel: ObservableObject {
 
     private func volumeMounted(_ url: URL?) {
         guard let url, Self.looksLikeDJI(url) else { return }
+        djiConnected(url)
+    }
+
+    /// launchd 에이전트가 `dji2note://mounted`로 앱을 깨웠을 때: DJI면 처리, 아니면(방금 켜진 경우) 조용히 종료
+    func checkMountedVolumes(launchedJustNow: Bool) {
+        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: nil,
+                                                            options: [.skipHiddenVolumes]) ?? []
+        if let dji = volumes.first(where: { $0.path.hasPrefix("/Volumes/") && Self.looksLikeDJI($0) }) {
+            djiConnected(dji)
+        } else if launchedJustNow {
+            NSApp.terminate(nil)
+        }
+    }
+
+    private var lastHandled: [String: Date] = [:]
+
+    /// DJI 연결 → 창을 띄워 상태를 보여 주고, 새 녹음이 있으면 자동 처리
+    private func djiConnected(_ volume: URL) {
+        // 앱 내부 감지와 launchd 에이전트가 같은 연결을 두 번 알릴 수 있어 1분 안의 중복은 무시
+        if let t = lastHandled[volume.path], Date().timeIntervalSince(t) < 60 { return }
+        lastHandled[volume.path] = Date()
+        statusText = "DJI 연결됨 — 녹음 확인 중…"
+        if connectAction != .silentProcess { showMainWindow() }
         Task {
             await refresh()
-            if autoProcess && setupDone {
+            let newCount = connected.filter { $0.status == "new" }.count
+            if setupDone && connectAction != .showOnly && newCount > 0 && !isBusy {
                 // 마운트 직후 파일시스템이 안정될 때까지 잠깐 대기
                 try? await Task.sleep(for: .seconds(2))
                 processConnected()
+            } else if !isBusy {
+                statusText = newCount == 0 ? "DJI 연결됨 — 새 녹음 없음 (모두 처리됨)"
+                                           : "DJI 연결됨 — 새 녹음 \(newCount)개"
             }
         }
+    }
+
+    /// 메인 창 열기 (Window 장면이 `dji2note://show`를 받아 열린다)
+    func showMainWindow() {
+        NSApp.activate(ignoringOtherApps: true)
+        NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+        // 창이 연결이 끊긴 모니터 등 화면 밖에 있으면 주 화면 가운데로
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard let win = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) else { return }
+            let visible = NSScreen.screens.contains { $0.visibleFrame.intersects(win.frame) }
+            if !visible { win.center() }
+            win.makeKeyAndOrderFront(nil)
+        }
+    }
+
+    /// 볼륨 마운트 때 앱을 깨우는 백그라운드 항목(앱이 꺼져 있어도 DJI 연결 시 실행되게)
+    func registerMountAgent() {
+        let agent = SMAppService.agent(plistName: "io.dji2note.mount.plist")
+        guard agent.status != .enabled else { return }
+        do { try agent.register() } catch { appendLog("마운트 감지 항목 등록 실패: \(error.localizedDescription)") }
     }
 
     nonisolated static func looksLikeDJI(_ volume: URL) -> Bool {

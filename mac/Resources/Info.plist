@@ -13,6 +13,13 @@
   <key>CFBundleDevelopmentRegion</key><string>ko</string>
   <key>LSMinimumSystemVersion</key><string>14.0</string>
   <key>LSUIElement</key><true/>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key><string>io.dji2note.app</string>
+      <key>CFBundleURLSchemes</key><array><string>dji2note</string></array>
+    </dict>
+  </array>
   <key>LSApplicationCategoryType</key><string>public.app-category.productivity</string>
   <key>NSHumanReadableCopyright</key><string>MIT License · github.com/hongsw/dji2note</string>
 </dict>

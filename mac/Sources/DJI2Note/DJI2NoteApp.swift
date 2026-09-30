@@ -4,7 +4,7 @@ import SwiftUI
 @main
 struct DJI2NoteApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
-    @StateObject private var model = AppModel()
+    @StateObject private var model = AppModel.shared
 
     var body: some Scene {
         Window("DJI2Note", id: "main") {
@@ -19,11 +19,13 @@ struct DJI2NoteApp: App {
             .onAppear { NSApp.activate(ignoringOtherApps: true) }
         }
         .windowResizability(.contentSize)
+        .handlesExternalEvents(matching: ["show"])
 
         WindowGroup("회의록", id: "viewer", for: NoteRef.self) { $ref in
             if let ref { NoteViewer(ref: ref) }
         }
         .defaultSize(width: 760, height: 720)
+        .handlesExternalEvents(matching: [])
 
         MenuBarExtra {
             MenuPanel()
@@ -36,6 +38,15 @@ struct DJI2NoteApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let launchedAt = Date()
+
+    /// dji2note://mounted — 볼륨 마운트 때 launchd 에이전트가 보냄
+    func application(_ application: NSApplication, open urls: [URL]) {
+        guard urls.contains(where: { $0.host == "mounted" }) else { return }
+        let justNow = Date().timeIntervalSince(launchedAt) < 10
+        Task { @MainActor in AppModel.shared.checkMountedVolumes(launchedJustNow: justNow) }
+    }
+
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -77,6 +88,12 @@ struct MenuPanel: View {
                 Button("설정 시작하기…") { show() }
                     .buttonStyle(.borderedProminent)
             } else {
+                Picker(selection: $model.connectAction) {
+                    ForEach(AppModel.ConnectAction.allCases) { Text($0.title).tag($0) }
+                } label: {
+                    Label("DJI 연결 시", systemImage: "cable.connector")
+                }
+                .font(.callout)
                 let newCount = model.connected.filter { $0.status == "new" }.count
                 if newCount > 0 {
                     Label("연결된 DJI에 새 녹음 \(newCount)개", systemImage: "mic.badge.plus")

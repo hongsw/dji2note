@@ -217,7 +217,10 @@ struct AutomationSection: View {
 
     var body: some View {
         Section {
-            Toggle("DJI를 연결하면 자동으로 처리", isOn: $model.autoProcess)
+            Picker("DJI를 연결하면", selection: $model.connectAction) {
+                ForEach(AppModel.ConnectAction.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.radioGroup)
             Toggle("Mac에 로그인하면 DJI2Note 실행 (메뉴바에 상주)", isOn: $loginItem)
                 .onChange(of: loginItem) { _, v in model.launchAtLogin = v }
         } header: {
