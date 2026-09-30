@@ -16,7 +16,10 @@ RCLONE_URL = "https://downloads.rclone.org/rclone-current-osx-arm64.zip"
 
 def setup_path():
     """launchd·GUI에서 실행돼도 도구를 찾도록 PATH를 보강하고 ffmpeg가 없으면 내장본을 연결한다."""
-    dirs = [SHIM_BIN, APP_BIN, Path.home() / ".local/bin", Path("/opt/homebrew/bin"), Path("/usr/local/bin")]
+    home = Path.home()
+    # GUI·launchd에서 실행돼도 claude/codex(npm 전역 설치) 등을 찾도록 흔한 설치 위치를 추가
+    dirs = [SHIM_BIN, APP_BIN, home / ".local/bin", Path("/opt/homebrew/bin"), Path("/usr/local/bin"),
+            home / ".asdf/shims", home / ".volta/bin", home / ".npm-global/bin", home / ".bun/bin"]
     current = os.environ.get("PATH", "/usr/bin:/bin").split(":")
     os.environ["PATH"] = ":".join([str(d) for d in dirs if str(d) not in current] + current)
     if not shutil.which("ffmpeg"):

@@ -15,6 +15,28 @@ struct EngineConfig: Codable, Equatable {
     var drive_folder = "dji2note"
     var notify = true
     var notes_dir: String?
+    // v0.1.5+ (예전 엔진에는 없을 수 있어 선택값)
+    var llm_fast_model: String?
+    var openai_api_key: String?
+    var gemini_api_key: String?
+    var baryon_api_url: String?
+    var baryon_api_key: String?
+    var providers: [String: Provider]?
+    var codex_installed: Bool?
+
+    struct Provider: Codable, Equatable {
+        let title: String
+        let models: [String]
+    }
+}
+
+/// 연결된 DJI 장치(볼륨) 정보
+struct DeviceInfo: Equatable {
+    let name: String
+    let url: URL
+    let total: Int64
+    let free: Int64
+    var used: Int64 { total - free }
 }
 
 struct Check: Codable, Identifiable {
@@ -61,6 +83,7 @@ final class AppModel: ObservableObject {
     @Published var history: [HistoryItem] = []
     @Published var connected: [DJIRecording] = []
     @Published var driveRemotes: [String] = []
+    @Published var device: DeviceInfo?
 
     @Published var isBusy = false
     @Published var statusText = "대기 중"
@@ -99,6 +122,7 @@ final class AppModel: ObservableObject {
     }
 
     private var mountObserver: NSObjectProtocol?
+    private var unmountObserver: NSObjectProtocol?
 
     static let shared = AppModel()
 
@@ -112,11 +136,80 @@ final class AppModel: ObservableObject {
 
     func refresh() async {
         engineInstalled = Engine.isInstalled
+        refreshDevice()
         guard engineInstalled else { return }
         if let c = await Engine.json(["config", "show", "--json"], as: EngineConfig.self) { config = c }
         await refreshHistory()
         driveRemotes = await Engine.json(["drive", "remotes"], as: [String].self) ?? []
         connected = await Engine.json(["scan", "--json"], as: [DJIRecording].self) ?? []
+        attachIfEngineRunning()
+    }
+
+    /// 마운트된 볼륨 중 DJI를 찾아 용량 정보와 함께 갱신
+    func refreshDevice() {
+        let keys: [URLResourceKey] = [.volumeNameKey, .volumeTotalCapacityKey, .volumeAvailableCapacityKey]
+        let volumes = FileManager.default.mountedVolumeURLs(includingResourceValuesForKeys: keys,
+                                                            options: [.skipHiddenVolumes]) ?? []
+        guard let v = volumes.first(where: { $0.path.hasPrefix("/Volumes/") && Self.looksLikeDJI($0) }),
+              let r = try? v.resourceValues(forKeys: Set(keys)) else { device = nil; return }
+        device = DeviceInfo(name: r.volumeName ?? v.lastPathComponent, url: v,
+                            total: Int64(r.volumeTotalCapacity ?? 0), free: Int64(r.volumeAvailableCapacity ?? 0))
+    }
+
+    /// DJI 안전하게 꺼내기
+    func ejectDevice() {
+        guard let d = device else { return }
+        do {
+            try NSWorkspace.shared.unmountAndEjectDevice(at: d.url)
+            device = nil
+            connected = []
+            statusText = "DJI를 꺼냈습니다 — 분리해도 됩니다"
+        } catch {
+            statusText = "꺼내기 실패: \(error.localizedDescription)"
+        }
+    }
+
+    // MARK: 앱이 다시 켜졌을 때, 이미 돌고 있는 엔진에 다시 연결
+
+    private var tailTimer: Timer?
+    private var tailOffset: UInt64 = 0
+    private var ownRun = false
+
+    /// ~/.config/dji2note/running.json 의 pid가 살아 있으면 로그 파일을 따라 읽으며 진행 상황을 보여 준다
+    func attachIfEngineRunning() {
+        guard !ownRun, tailTimer == nil else { return }
+        let runFile = Paths.home.appending(path: ".config/dji2note/running.json")
+        guard let data = try? Data(contentsOf: runFile),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let pidNum = obj["pid"] as? Int, kill(pid_t(pidNum), 0) == 0 else { return }
+        let pid = pid_t(pidNum)
+        isBusy = true
+        statusText = "진행 중인 처리에 다시 연결했습니다"
+        // 최근 로그로 현재 단계를 복원
+        if let text = try? String(contentsOf: Paths.log, encoding: .utf8) {
+            for line in text.split(separator: "\n").suffix(40) { handle(String(line)) }
+        }
+        tailOffset = (try? FileManager.default.attributesOfItem(atPath: Paths.log.path)[.size] as? UInt64) ?? 0
+        tailTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.tailTick(pid: pid) }
+        }
+    }
+
+    private func tailTick(pid: pid_t) {
+        if let h = try? FileHandle(forReadingFrom: Paths.log) {
+            defer { try? h.close() }
+            try? h.seek(toOffset: tailOffset)
+            let data = h.readDataToEndOfFile()
+            tailOffset += UInt64(data.count)
+            for line in String(decoding: data, as: UTF8.self).split(separator: "\n") { handle(String(line)) }
+        }
+        if kill(pid, 0) != 0 {  // 엔진이 끝남
+            tailTimer?.invalidate()
+            tailTimer = nil
+            isBusy = false
+            progress = nil
+            Task { await refresh() }
+        }
     }
 
     func refreshHistory() async {
@@ -198,6 +291,7 @@ final class AppModel: ObservableObject {
     private func runPipeline(_ args: [String], title: String) {
         guard !isBusy, engineInstalled else { return }
         isBusy = true
+        ownRun = true
         progress = nil
         position = ""
         statusText = "\(title) 시작"
@@ -205,7 +299,7 @@ final class AppModel: ObservableObject {
         let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled], reason: "DJI2Note 회의록 처리")
         Task {
-            defer { ProcessInfo.processInfo.endActivity(activity) }
+            defer { ProcessInfo.processInfo.endActivity(activity); ownRun = false }
             let r = await Engine.cli(args) { [weak self] line in
                 Task { @MainActor in self?.handle(line) }
             }
@@ -276,6 +370,15 @@ final class AppModel: ObservableObject {
         ) { [weak self] note in
             let url = note.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
             Task { @MainActor in self?.volumeMounted(url) }
+        }
+        unmountObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didUnmountNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.refreshDevice()
+                if self.device == nil { self.connected = [] }
+            }
         }
     }
 

@@ -2,6 +2,7 @@
 import fcntl
 import re
 import shutil
+import sys
 import subprocess
 import tempfile
 import time
@@ -18,7 +19,43 @@ MIN_TEXT_CHARS = 40    # 전사가 이보다 짧으면 대화 없음
 
 
 def log(msg):
-    print(f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}", flush=True)
+    """화면(앱의 파이프)과 로그 파일 양쪽에 쓴다.
+
+    앱이 종료·교체돼 파이프가 끊겨도 엔진은 계속 돌고, 다시 켜진 앱은 로그 파일을 이어 읽는다.
+    """
+    line = f"{datetime.now():%Y-%m-%d %H:%M:%S} {msg}"
+    try:
+        print(line, flush=True)
+    except (BrokenPipeError, OSError):
+        pass
+    try:
+        config.LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
+        with open(config.LOG_FILE, "a") as f:
+            f.write(line + "\n")
+    except OSError:
+        pass
+
+
+class _SafeStream:
+    """앱이 종료돼 파이프가 닫혀도 쓰기 오류로 죽지 않도록 감싼 출력(tqdm 진행률 포함)."""
+
+    def __init__(self, stream):
+        self._s = stream
+
+    def write(self, data):
+        try:
+            return self._s.write(data)
+        except (BrokenPipeError, OSError, ValueError):
+            return len(data)
+
+    def flush(self):
+        try:
+            self._s.flush()
+        except (BrokenPipeError, OSError, ValueError):
+            pass
+
+    def __getattr__(self, name):
+        return getattr(self._s, name)
 
 
 def notify(cfg: Config, msg: str):
@@ -129,11 +166,12 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
         body = transcribe.label_by_loudness(raw)
         (folder / "transcript.md").write_text(transcript_doc(title, body, "none"))
     else:
-        body = llm.make_transcript(cfg, raw, log=log)
+        body = llm.make_transcript(cfg, raw, log=log, cache_dir=folder / ".chunks")
         transcript = transcript_doc(title, body, cfg.llm_backend)
         (folder / "transcript.md").write_text(transcript)
-        log(f"요약 작성 중 ({cfg.llm_model})")
+        log(f"요약 작성 중 ({cfg.llm_model or '기본 모델'})")
         (folder / "summary.md").write_text(llm.make_summary(cfg, title, transcript))
+        shutil.rmtree(folder / ".chunks", ignore_errors=True)  # 다 끝났으면 조각 캐시 정리
     log(f"저장: {folder}")
 
     result = {"status": "done", "notes": str(folder)}
@@ -157,6 +195,18 @@ def run(cfg: Config, dry_run: bool = False, include_seen: bool = False, names: l
     except BlockingIOError:
         log("이미 실행 중")
         return
+    if not dry_run:
+        import atexit
+        import json
+        import os
+        import signal
+        # 앱이 끊겨도 계속 돌도록: 파이프가 닫혀 SIGPIPE/SIGHUP이 와도 종료하지 않음
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+        sys.stdout, sys.stderr = _SafeStream(sys.stdout), _SafeStream(sys.stderr)
+        # 실행 중 표시 — 다시 켜진 앱이 이 파일과 로그로 진행 상황을 이어 받는다
+        config.RUN_FILE.write_text(json.dumps({"pid": os.getpid(), "started": datetime.now().isoformat()}))
+        atexit.register(lambda: config.RUN_FILE.unlink(missing_ok=True))
 
     time.sleep(0 if dry_run else 3)  # 마운트 직후 안정화
     state = config.load_state()

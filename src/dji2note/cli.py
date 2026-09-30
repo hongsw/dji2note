@@ -145,8 +145,8 @@ def run_checks(cfg: Config, live: bool = True) -> list[dict]:
     add("config", config.CONFIG_FILE.exists(), "설정 파일", "dji2note init")
     add("ffmpeg", tools.ffmpeg(), "ffmpeg", "dji2note setup-tools")
 
-    if cfg.llm_backend in ("claude-cli", "anthropic-api"):
-        label = "Claude Code CLI" if cfg.llm_backend == "claude-cli" else "Anthropic API"
+    if cfg.llm_backend != "none":
+        label = llm.PROVIDERS.get(cfg.llm_backend, {"title": cfg.llm_backend})["title"]
         if cfg.llm_backend == "claude-cli" and not tools.claude():
             add("llm", False, label, "Claude Code 설치 후 터미널에서 claude 로 로그인하세요")
         elif live:
@@ -263,10 +263,16 @@ def cmd_config(args):
                 setattr(cfg, key, int(value))
             else:
                 setattr(cfg, key, value)
+        keys = {p.partition("=")[0] for p in args.pairs}
+        if "llm_backend" in keys and not keys & {"llm_model", "llm_fast_model"}:
+            cfg.llm_model, cfg.llm_fast_model = llm.PROVIDERS.get(cfg.llm_backend, {"models": ("", "")})["models"]
         config.save(cfg)
     data = {k: v for k, v in cfg.__dict__.items() if k != "extra"}
-    data["anthropic_api_key"] = "***" if cfg.anthropic_api_key else ""
+    for k in ("anthropic_api_key", "openai_api_key", "gemini_api_key", "baryon_api_key"):
+        data[k] = "***" if getattr(cfg, k) else ""  # 키는 화면에 노출하지 않음
     data["config_file"] = str(config.CONFIG_FILE)
+    data["providers"] = {k: {"title": v["title"], "models": list(v["models"])} for k, v in llm.PROVIDERS.items()}
+    data["codex_installed"] = bool(llm.codex_cli_path())
     data["notes_dir"] = str(cfg.notes_dir)
     print(json.dumps(data, ensure_ascii=False, indent=None if args.json else 1))
 

@@ -34,6 +34,7 @@ struct HistoryTab: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            DeviceCard()
             HStack {
                 VStack(alignment: .leading) {
                     Text(model.statusText).font(.headline)

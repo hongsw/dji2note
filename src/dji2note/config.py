@@ -9,6 +9,7 @@ CONFIG_DIR = Path(os.environ.get("DJI2NOTE_HOME", Path.home() / ".config" / "dji
 CONFIG_FILE = CONFIG_DIR / "config.toml"
 STATE_FILE = CONFIG_DIR / "state.json"
 LOCK_FILE = CONFIG_DIR / "run.lock"
+RUN_FILE = CONFIG_DIR / "running.json"
 LOG_FILE = Path.home() / "Library" / "Logs" / "dji2note.log"
 
 
@@ -17,12 +18,16 @@ class Config:
     output_dir: str = str(Path.home() / "dji2note")
     language: str = "ko"
     whisper_model: str = "mlx-community/whisper-large-v3-turbo"
-    # llm_backend: "claude-cli" | "anthropic-api" | "none"
+    # llm_backend: claude-cli | codex-cli | anthropic-api | openai-api | gemini-api | baryon | none
     llm_backend: str = "none"
     llm_model: str = "claude-sonnet-5"          # 요약
     llm_fast_model: str = "claude-sonnet-5"     # 대본 교정(출력이 길어 빠른 모델) — 비우면 llm_model 사용
     llm_parallel: int = 4                       # 대본 조각 동시 처리 수
     anthropic_api_key: str = ""
+    openai_api_key: str = ""
+    gemini_api_key: str = ""
+    baryon_api_url: str = ""                    # Anthropic 호환 Messages API 주소
+    baryon_api_key: str = ""
     # upload: "none" | "rclone"
     upload: str = "none"
     rclone_remote: str = "gdrive"

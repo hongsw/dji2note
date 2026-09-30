@@ -42,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// dji2note://mounted — 볼륨 마운트 때 launchd 에이전트가 보냄
     func application(_ application: NSApplication, open urls: [URL]) {
+        NSLog("DJI2Note openURLs: %@", urls.map(\.absoluteString).joined(separator: ","))
         if urls.contains(where: { $0.host == "process-all" }) {
             Task { @MainActor in AppModel.shared.processAll() }  // 자동화·스크립트용
             return
@@ -77,6 +78,8 @@ struct MenuPanel: View {
                 Spacer()
                 if model.isBusy { ProgressView().controlSize(.small) }
             }
+
+            DeviceCard(compact: true)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.statusText).font(.callout)

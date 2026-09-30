@@ -4,9 +4,6 @@ import SwiftUI
 // 설정 마법사와 설정 창이 함께 쓰는 화면 조각들
 
 let languages: [(String, String)] = [("ko", "한국어"), ("en", "English"), ("ja", "日本語"), ("zh", "中文"), ("auto", "자동 감지")]
-let models: [(String, String)] = [("claude-sonnet-5", "Claude Sonnet 5 (권장·균형)"),
-                                  ("claude-opus-5-5", "Claude Opus 5.5 (최고 품질)"),
-                                  ("claude-haiku-4-5-20251001", "Claude Haiku 4.5 (빠르고 저렴)")]
 
 /// 저장 폴더·언어·알림
 struct GeneralSection: View {
@@ -45,81 +42,48 @@ struct GeneralSection: View {
     }
 }
 
-/// 화자 분리·요약 AI
+/// 화자 분리·요약 AI — 구독형(CLI 로그인)과 API 키형 공급자
 struct AISection: View {
     @EnvironmentObject var model: AppModel
-    @State private var apiKey = ""
+    @State private var key = ""
+    @State private var baryonURL = ""
     @State private var testing = false
     @State private var testResult: String?
     @State private var auth: Engine.ClaudeAuth?
     @State private var authChecked = false
 
+    private let subscription: [(String, String)] = [("claude-cli", "Claude Code — Anthropic 구독"),
+                                                    ("codex-cli", "Codex — ChatGPT 구독")]
+    private let apiKeys: [(String, String)] = [("anthropic-api", "Anthropic API (Claude)"),
+                                               ("openai-api", "OpenAI API (GPT)"),
+                                               ("gemini-api", "Google Gemini API"),
+                                               ("baryon", "Baryon AI")]
+
+    private var backend: String { model.config.llm_backend }
+
     var body: some View {
         Section {
             Picker("사용할 AI", selection: Binding(
-                get: { model.config.llm_backend },
-                set: { v in Task { await model.set(["llm_backend": v]) } })) {
-                Text("Claude Code (구독)").tag("claude-cli")
-                Text("Anthropic API 키").tag("anthropic-api")
-                Text("사용 안 함").tag("none")
-            }
-            .pickerStyle(.segmented)
-
-            switch model.config.llm_backend {
-            case "claude-cli":
-                LabeledContent("Claude Code") {
-                    if !authChecked {
-                        ProgressView().controlSize(.small)
-                    } else if let auth, auth.loggedIn {
-                        Label("로그인됨" + (auth.email.map { " (\($0))" } ?? ""), systemImage: "checkmark.circle.fill")
-                            .foregroundStyle(.green)
-                    } else if Engine.claudePath() == nil {
-                        Label("설치 안 됨", systemImage: "xmark.circle").foregroundStyle(.orange)
-                    } else {
-                        Label("로그인 필요", systemImage: "person.crop.circle.badge.exclamationmark").foregroundStyle(.orange)
-                    }
+                get: { backend },
+                set: { v in testResult = nil; Task { await model.set(["llm_backend": v]) } })) {
+                Section("구독 (로그인만 하면 됨)") {
+                    ForEach(subscription, id: \.0) { Text($0.1).tag($0.0) }
                 }
-                if authChecked && auth?.loggedIn != true {
-                    HStack {
-                        Button(Engine.claudePath() == nil ? "Claude Code 설치·로그인…" : "Claude 로그인…") {
-                            model.openClaudeLogin()
-                        }
-                        Button("다시 확인") { Task { await checkAuth() } }
-                        Text("터미널이 열리면 브라우저에서 로그인하세요.").font(.caption).foregroundStyle(.secondary)
-                    }
+                Section("API 키") {
+                    ForEach(apiKeys, id: \.0) { Text($0.1).tag($0.0) }
                 }
-            case "anthropic-api":
-                LabeledContent("API 키") {
-                    HStack {
-                        SecureField(model.config.anthropic_api_key.isEmpty ? "sk-ant-…" : "저장됨 (바꾸려면 입력)",
-                                    text: $apiKey)
-                            .textFieldStyle(.roundedBorder)
-                        Button("저장") {
-                            let key = apiKey
-                            Task { await model.set(["anthropic_api_key": key]); apiKey = "" }
-                        }
-                        .disabled(apiKey.isEmpty)
-                    }
-                }
-                Link("API 키 발급받기 (console.anthropic.com)", destination: URL(string: "https://console.anthropic.com/settings/keys")!)
-                    .font(.caption)
-            default:
-                Text("받아쓰기와 음량 기준의 간단한 화자 구분만 합니다. 요약은 만들지 않습니다.")
-                    .font(.callout).foregroundStyle(.secondary)
+                Divider()
+                Text("사용 안 함 — 받아쓰기만").tag("none")
             }
 
-            if model.config.llm_backend != "none" {
-                Picker("모델", selection: Binding(
-                    get: { model.config.llm_model },
-                    set: { v in Task { await model.set(["llm_model": v]) } })) {
-                    ForEach(models, id: \.0) { Text($0.1).tag($0.0) }
-                    if !models.contains(where: { $0.0 == model.config.llm_model }) {
-                        Text(model.config.llm_model).tag(model.config.llm_model)
-                    }
-                }
+            credentials
+
+            if backend != "none" {
+                modelField("요약 모델", key: "llm_model", value: model.config.llm_model, slot: 0)
+                modelField("대본 정리 모델", key: "llm_fast_model", value: model.config.llm_fast_model ?? "", slot: 1)
                 HStack {
                     Button(testing ? "확인 중…" : "연결 테스트") { test() }.disabled(testing)
-                    if let testResult { Text(testResult).font(.callout) }
+                    if let testResult { Text(testResult).font(.callout).lineLimit(2) }
                 }
             }
         } header: {
@@ -129,9 +93,119 @@ struct AISection: View {
                     Task { await checkAuth() }  // 터미널에서 로그인하고 돌아오면 자동 갱신
                 }
         } footer: {
-            Text("음성은 Mac 안에서만 받아씁니다. AI를 켜면 받아쓴 텍스트가 Anthropic으로 전송됩니다.")
+            Text("음성은 Mac 안에서만 받아씁니다. AI를 켜면 받아쓴 텍스트가 선택한 AI 회사로 전송됩니다. "
+                 + "대본 정리는 글이 길어 빠른 모델, 요약은 가장 좋은 모델을 권장합니다.")
                 .font(.caption).foregroundStyle(.secondary)
         }
+    }
+
+    // MARK: 공급자별 인증 입력
+
+    @ViewBuilder private var credentials: some View {
+        switch backend {
+        case "claude-cli":
+            LabeledContent("Claude Code") {
+                if !authChecked {
+                    ProgressView().controlSize(.small)
+                } else if let auth, auth.loggedIn {
+                    Label("로그인됨" + (auth.email.map { " (\($0))" } ?? ""), systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                } else {
+                    Label(Engine.claudePath() == nil ? "설치 안 됨" : "로그인 필요", systemImage: "exclamationmark.circle")
+                        .foregroundStyle(.orange)
+                }
+            }
+            if authChecked && auth?.loggedIn != true {
+                HStack {
+                    Button(Engine.claudePath() == nil ? "Claude Code 설치·로그인…" : "Claude 로그인…") { model.openClaudeLogin() }
+                    Button("다시 확인") { Task { await checkAuth() } }
+                }
+            }
+        case "codex-cli":
+            LabeledContent("Codex") {
+                if model.config.codex_installed == true {
+                    Label("설치됨", systemImage: "checkmark.circle.fill").foregroundStyle(.green)
+                } else {
+                    Label("설치 안 됨", systemImage: "exclamationmark.circle").foregroundStyle(.orange)
+                }
+            }
+            Text("터미널에서 `npm i -g @openai/codex` 설치 후 `codex login`으로 ChatGPT 계정 로그인. 모델을 비우면 codex 기본 모델을 씁니다.")
+                .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+        case "anthropic-api":
+            keyField(configKey: "anthropic_api_key", saved: !model.config.anthropic_api_key.isEmpty,
+                     placeholder: "sk-ant-…", link: "https://console.anthropic.com/settings/keys")
+        case "openai-api":
+            keyField(configKey: "openai_api_key", saved: !(model.config.openai_api_key ?? "").isEmpty,
+                     placeholder: "sk-…", link: "https://platform.openai.com/api-keys")
+        case "gemini-api":
+            keyField(configKey: "gemini_api_key", saved: !(model.config.gemini_api_key ?? "").isEmpty,
+                     placeholder: "AIza…", link: "https://aistudio.google.com/apikey")
+        case "baryon":
+            LabeledContent("API 주소") {
+                HStack {
+                    TextField("https://…", text: $baryonURL).textFieldStyle(.roundedBorder)
+                    Button("저장") { let u = baryonURL; Task { await model.set(["baryon_api_url": u]) } }
+                        .disabled(baryonURL.isEmpty || baryonURL == (model.config.baryon_api_url ?? ""))
+                }
+            }
+            .onAppear { baryonURL = model.config.baryon_api_url ?? "" }
+            keyField(configKey: "baryon_api_key", saved: !(model.config.baryon_api_key ?? "").isEmpty,
+                     placeholder: "Baryon AI 키", link: nil)
+            Text("Anthropic 호환 Messages API(`/v1/messages`)를 씁니다.").font(.caption).foregroundStyle(.secondary)
+        default:
+            Text("받아쓰기와 음량 기준의 간단한 화자 구분만 합니다. 요약은 만들지 않습니다.")
+                .font(.callout).foregroundStyle(.secondary)
+        }
+    }
+
+    private func keyField(configKey: String, saved: Bool, placeholder: String, link: String?) -> some View {
+        Group {
+            LabeledContent("API 키") {
+                HStack {
+                    SecureField(saved ? "저장됨 (바꾸려면 입력)" : placeholder, text: $key)
+                        .textFieldStyle(.roundedBorder)
+                    Button("저장") { let k = key; Task { await model.set([configKey: k]); key = "" } }
+                        .disabled(key.isEmpty)
+                }
+            }
+            if let link, let url = URL(string: link) {
+                Link("API 키 발급받기", destination: url).font(.caption)
+            }
+        }
+    }
+
+    /// 모델: 공급자 권장값 메뉴 + 직접 입력
+    private func modelField(_ label: String, key: String, value: String, slot: Int) -> some View {
+        let presets = presetModels
+        return LabeledContent(label) {
+            HStack {
+                TextField(backend == "codex-cli" ? "비우면 기본 모델" : "모델 이름", text: Binding(
+                    get: { value },
+                    set: { v in Task { await model.set([key: v]) } }))
+                    .textFieldStyle(.roundedBorder)
+                if !presets.isEmpty {
+                    Menu {
+                        ForEach(presets, id: \.self) { m in Button(m) { Task { await model.set([key: m]) } } }
+                    } label: { Image(systemName: "chevron.down") }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                }
+            }
+        }
+    }
+
+    /// 엔진이 알려 주는 공급자 기본 모델 + 잘 알려진 대안
+    private var presetModels: [String] {
+        var list = model.config.providers?[backend]?.models.filter { !$0.isEmpty } ?? []
+        let extra: [String: [String]] = [
+            "claude-cli": ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+            "anthropic-api": ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+            "baryon": ["claude-opus-5-5", "claude-sonnet-5", "claude-haiku-4-5-20251001"],
+            "openai-api": ["gpt-5", "gpt-5-mini"],
+            "gemini-api": ["gemini-2.5-pro", "gemini-2.5-flash"],
+        ]
+        for m in extra[backend] ?? [] where !list.contains(m) { list.append(m) }
+        return list
     }
 
     private func checkAuth() async {
