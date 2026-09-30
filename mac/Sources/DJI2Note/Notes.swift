@@ -74,6 +74,10 @@ struct HistoryRow: View {
                     Button { NSWorkspace.shared.open(URL(filePath: folder)) } label: { Image(systemName: "folder") }
                         .help("Mac의 회의록 폴더 열기")
                 }
+                if let url = item.entry.notion_url, let u = URL(string: url), !url.isEmpty {
+                    Button { NSWorkspace.shared.open(u) } label: { Image(systemName: "n.square") }
+                        .help("Notion에서 열기")
+                }
                 if let url = item.entry.drive_url, let u = URL(string: url), !url.isEmpty {
                     Button { NSWorkspace.shared.open(u) } label: { Image(systemName: "globe") }
                         .help("Google Drive에서 열기")

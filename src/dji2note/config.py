@@ -32,6 +32,9 @@ class Config:
     upload: str = "none"
     rclone_remote: str = "gdrive"
     drive_folder: str = "dji2note"
+    notion_enabled: bool = False
+    notion_token: str = ""                      # Notion 내부 통합 토큰 (ntn_… / secret_…)
+    notion_parent: str = ""                     # 회의록을 모을 페이지·데이터베이스 링크
     notify: bool = True
     extra: dict = field(default_factory=dict)
 

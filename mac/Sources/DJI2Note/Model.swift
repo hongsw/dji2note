@@ -23,6 +23,9 @@ struct EngineConfig: Codable, Equatable {
     var baryon_api_key: String?
     var providers: [String: Provider]?
     var codex_installed: Bool?
+    var notion_enabled: Bool?
+    var notion_token: String?
+    var notion_parent: String?
 
     struct Provider: Codable, Equatable {
         let title: String
@@ -69,6 +72,7 @@ struct HistoryEntry: Codable {
     let notes: String?
     let drive: String?
     let drive_url: String?
+    let notion_url: String?
     let at: String?
 }
 
@@ -314,6 +318,22 @@ final class AppModel: ObservableObject {
     var pendingCount: Int { connected.filter { $0.status == "new" || $0.status == "seen" }.count }
 
     /// 건너뛴 것까지 전부 한 번에: 먼저 모두 복사 → 최신 회의부터 차례로 처리
+    struct NotionTest: Decodable {
+        let ok: Bool
+        let type: String?
+        let title: String?
+        let error: String?
+    }
+
+    func testNotion() async -> NotionTest? {
+        await Engine.json(["notion"], as: NotionTest.self)
+    }
+
+    /// 이미 만든 회의록 중 Notion에 없는 것 전부 올리기
+    func publishAllToNotion() {
+        runPipeline(["publish", "--all"], title: "Notion에 올리기")
+    }
+
     func processAll() {
         runPipeline(["run", "--all"], title: "모두 처리")
     }
@@ -403,6 +423,11 @@ final class AppModel: ObservableObject {
         } else if line.contains("저장: ") {
             statusText = (config.upload == "rclone" ? "Google Drive에 올리는 중" : "저장 완료") + position
             progress = nil
+        } else if line.contains("Notion에 올리는 중") {
+            statusText = "Notion에 올리는 중\(position)"
+        } else if let m = line.firstMatch(of: /올림 \[(\d+)\/(\d+)\]/) {
+            statusText = "올리는 중 (\(m.1)/\(m.2))"
+            progress = (Double(m.1) ?? 0) / max(Double(m.2) ?? 1, 1)
         } else if line.contains("업로드: ") {
             statusText = "올리기 완료\(position)"
         } else if line.contains("대화 없음") {

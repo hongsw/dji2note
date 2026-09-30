@@ -8,7 +8,7 @@ struct OnboardingView: View {
     @State private var installFailed = false
     @State private var withModel = true
 
-    private let titles = ["환영합니다", "엔진 설치", "요약 AI", "Google Drive", "마무리"]
+    private let titles = ["환영합니다", "엔진 설치", "요약 AI", "연동", "마무리"]
 
     var body: some View {
         VStack(spacing: 0) {
@@ -19,7 +19,7 @@ struct OnboardingView: View {
                 case 0: welcome
                 case 1: install
                 case 2: Form { AISection() }.formStyle(.grouped)
-                case 3: Form { DriveSection() }.formStyle(.grouped)
+                case 3: Form { DriveSection(); NotionSection() }.formStyle(.grouped)
                 default: finish
                 }
             }

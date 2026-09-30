@@ -9,7 +9,7 @@ import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from . import config, llm, transcribe, upload
+from . import config, llm, notion, transcribe, upload
 from .config import Config
 
 # DJI Mic / Mic 2 / Mic Mini 파일명: TX00_MIC025_20260928_112702_orig.wav
@@ -179,6 +179,14 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
         result["drive"] = upload.upload(cfg, folder)
         result["drive_url"] = upload.folder_url(cfg, folder.name)
         log(f"업로드: {result['drive']}")
+    if cfg.notion_enabled:
+        # Notion 실패는 회의 처리 실패로 보지 않는다 — `dji2note publish --notion` 으로 다시 올림
+        try:
+            log("Notion에 올리는 중")
+            result["notion_url"] = notion.publish(cfg, folder, result.get("drive_url", ""))
+            log(f"Notion: {result['notion_url']}")
+        except Exception as e:
+            log(f"Notion 올리기 실패(회의록은 저장됨): {e}")
     return result
 
 

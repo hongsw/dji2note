@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import __version__, config, llm, pipeline, service, tools, upload
+from . import __version__, config, llm, notion, pipeline, service, tools, upload
 from .config import Config
 
 OK, NG, WARN = "✅", "❌", "⚠️ "
@@ -155,6 +155,13 @@ def run_checks(cfg: Config, live: bool = True) -> list[dict]:
             except Exception as e:
                 add("llm", False, f"{label} 응답", str(e)[:200])
 
+    if cfg.notion_enabled:
+        try:
+            p = notion.resolve_parent(cfg) if live else {"title": ""}
+            add("notion", True, f"Notion 연결 '{p['title']}'")
+        except Exception as e:
+            add("notion", False, "Notion 연결", str(e)[:200])
+
     if cfg.upload == "rclone":
         rc = tools.rclone()
         ok = False
@@ -268,7 +275,7 @@ def cmd_config(args):
             cfg.llm_model, cfg.llm_fast_model = llm.PROVIDERS.get(cfg.llm_backend, {"models": ("", "")})["models"]
         config.save(cfg)
     data = {k: v for k, v in cfg.__dict__.items() if k != "extra"}
-    for k in ("anthropic_api_key", "openai_api_key", "gemini_api_key", "baryon_api_key"):
+    for k in ("anthropic_api_key", "openai_api_key", "gemini_api_key", "baryon_api_key", "notion_token"):
         data[k] = "***" if getattr(cfg, k) else ""  # 키는 화면에 노출하지 않음
     data["config_file"] = str(config.CONFIG_FILE)
     data["providers"] = {k: {"title": v["title"], "models": list(v["models"])} for k, v in llm.PROVIDERS.items()}
@@ -307,6 +314,54 @@ def cmd_render(args):
         import re
         html = re.search(r"<body>(.*)</body>", html, re.S).group(1)
     sys.stdout.write(html)
+
+
+def cmd_notion(args):
+    """Notion 연결 확인: 토큰과 회의록 페이지(또는 DB)에 접근되는지."""
+    cfg = config.load()
+    if args.token:
+        cfg.notion_token = args.token
+    if args.parent:
+        cfg.notion_parent = args.parent
+    try:
+        p = notion.resolve_parent(cfg)
+        out = {"ok": True, "type": p["type"], "title": p["title"] or "(제목 없음)"}
+    except Exception as e:
+        out = {"ok": False, "error": str(e)}
+    print(json.dumps(out, ensure_ascii=False))
+    return 0 if out["ok"] else 1
+
+
+def cmd_publish(args):
+    """이미 만든 회의록을 Notion·Drive에 (다시) 올린다. --all 이면 Notion에 없는 것 전부."""
+    cfg = config.load()
+    state = config.load_state()
+    if args.all:
+        folders = sorted({v["notes"] for v in state.values()
+                          if v.get("status") == "done" and v.get("notes") and not v.get("notion_url")})
+    else:
+        f = Path(args.folder).expanduser()
+        folders = [str(f if f.exists() else cfg.notes_dir / args.folder)]
+    if not folders:
+        print("올릴 회의록이 없습니다.")
+    for i, f in enumerate(folders, 1):
+        folder = Path(f)
+        entries = [v for v in state.values() if v.get("notes") == str(folder)]
+        drive_url = next((v.get("drive_url", "") for v in entries if v.get("drive_url")), "")
+        try:
+            if args.drive or (not args.notion and cfg.upload == "rclone"):
+                upload.upload(cfg, folder)
+                drive_url = upload.folder_url(cfg, folder.name) or drive_url
+            url = notion.publish(cfg, folder, drive_url) if (args.notion or args.all) else ""
+            pipeline.log(f"올림 [{i}/{len(folders)}]: {folder.name} {url}")
+            for v in entries:
+                if url:
+                    v["notion_url"] = url
+                if drive_url:
+                    v["drive_url"] = drive_url
+            config.save_state(state)
+        except Exception as e:
+            pipeline.log(f"실패: {folder.name}: {e}")
 
 
 def cmd_setup_tools(args):
@@ -373,6 +428,16 @@ def main():
     p.add_argument("names", nargs="*")
     p.add_argument("--all-new", action="store_true", help="연결된 DJI의 새 녹음 전부")
     p.set_defaults(fn=cmd_skip)
+    p = sub.add_parser("notion", help="Notion 연결 확인 (--token, --parent 로 저장 전 시험 가능)")
+    p.add_argument("--token")
+    p.add_argument("--parent")
+    p.set_defaults(fn=cmd_notion)
+    p = sub.add_parser("publish", help="회의록을 Notion·Drive에 (다시) 올리기")
+    p.add_argument("folder", nargs="?")
+    p.add_argument("--all", action="store_true", help="Notion에 아직 없는 회의록 전부 Notion으로")
+    p.add_argument("--notion", action="store_true")
+    p.add_argument("--drive", action="store_true")
+    p.set_defaults(fn=cmd_publish)
     p = sub.add_parser("render", help="Markdown 회의록을 HTML로 출력")
     p.add_argument("file")
     p.add_argument("--fragment", action="store_true", help="<body> 안쪽만")

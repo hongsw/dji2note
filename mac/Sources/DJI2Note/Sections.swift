@@ -327,3 +327,73 @@ struct LogView: View {
         }
     }
 }
+
+/// Notion 연동 — 내부 통합 토큰 + 회의록을 모을 페이지(또는 데이터베이스)
+struct NotionSection: View {
+    @EnvironmentObject var model: AppModel
+    @State private var token = ""
+    @State private var parent = ""
+    @State private var testing = false
+    @State private var result: AppModel.NotionTest?
+
+    var body: some View {
+        Section {
+            Toggle("회의록을 Notion 페이지로도 올리기", isOn: Binding(
+                get: { model.config.notion_enabled ?? false },
+                set: { v in Task { await model.set(["notion_enabled": v ? "true" : "false"]) } }))
+                .disabled(!(result?.ok ?? false) && !(model.config.notion_enabled ?? false))
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("처음 한 번만 설정하면 됩니다").font(.callout.weight(.semibold))
+                Text("① [Notion 통합 만들기](https://www.notion.so/profile/integrations) → 새 통합(내부) → 토큰 복사")
+                Text("② 회의록을 모을 Notion 페이지(또는 데이터베이스)에서 ••• → 연결 → 방금 만든 통합 추가")
+                Text("③ 그 페이지의 링크를 복사해 아래에 붙여 넣기")
+            }
+            .font(.caption).foregroundStyle(.secondary)
+
+            LabeledContent("통합 토큰") {
+                HStack {
+                    SecureField((model.config.notion_token ?? "").isEmpty ? "ntn_…" : "저장됨 (바꾸려면 입력)", text: $token)
+                        .textFieldStyle(.roundedBorder)
+                    Button("저장") { let t = token; Task { await model.set(["notion_token": t]); token = ""; await test() } }
+                        .disabled(token.isEmpty)
+                }
+            }
+            LabeledContent("회의록 페이지") {
+                HStack {
+                    TextField("https://www.notion.so/…", text: $parent).textFieldStyle(.roundedBorder)
+                    Button("저장") { let p = parent; Task { await model.set(["notion_parent": p]); await test() } }
+                        .disabled(parent.isEmpty || parent == (model.config.notion_parent ?? ""))
+                }
+            }
+            HStack {
+                Button(testing ? "확인 중…" : "연결 테스트") { Task { await test() } }
+                    .disabled(testing || (model.config.notion_token ?? "").isEmpty || (model.config.notion_parent ?? "").isEmpty)
+                if let r = result {
+                    if r.ok {
+                        Label("\(r.type == "database" ? "데이터베이스" : "페이지") '\(r.title ?? "")'에 연결됨",
+                              systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout)
+                    } else {
+                        Text("❌ \(r.error ?? "실패")").font(.callout).foregroundStyle(.red).lineLimit(3)
+                    }
+                }
+            }
+            if model.config.notion_enabled ?? false {
+                Button("이미 만든 회의록도 모두 Notion에 올리기") { model.publishAllToNotion() }
+                    .disabled(model.isBusy)
+            }
+        } header: {
+            Text("Notion")
+        } footer: {
+            Text("회의마다 Notion 페이지가 하나 생기고(요약), 대본은 하위 페이지로 들어갑니다. 데이터베이스를 고르면 제목·날짜 속성을 채웁니다.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear { parent = model.config.notion_parent ?? "" }
+    }
+
+    private func test() async {
+        testing = true
+        result = await model.testNotion()
+        testing = false
+    }
+}

@@ -13,8 +13,8 @@ struct SettingsView: View {
                 .tabItem { Label("일반", systemImage: "gearshape") }.tag("general")
             Form { AISection() }.formStyle(.grouped)
                 .tabItem { Label("AI", systemImage: "sparkles") }.tag("ai")
-            Form { DriveSection() }.formStyle(.grouped)
-                .tabItem { Label("Google Drive", systemImage: "icloud.and.arrow.up") }.tag("drive")
+            Form { DriveSection(); NotionSection() }.formStyle(.grouped)
+                .tabItem { Label("연동", systemImage: "link") }.tag("drive")
             DiagnosticsTab().tabItem { Label("점검", systemImage: "stethoscope") }.tag("doctor")
         }
         .padding()
