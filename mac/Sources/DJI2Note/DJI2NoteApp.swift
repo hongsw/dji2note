@@ -31,7 +31,8 @@ struct DJI2NoteApp: App {
             MenuPanel()
                 .environmentObject(model)
         } label: {
-            Image(systemName: model.isBusy ? "waveform.circle.fill" : "waveform.circle")
+            Image(systemName: model.recorder.isRecording ? "record.circle.fill"
+                              : (model.isBusy ? "waveform.circle.fill" : "waveform.circle"))
         }
         .menuBarExtraStyle(.window)
     }
@@ -43,6 +44,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// dji2note://mounted — 볼륨 마운트 때 launchd 에이전트가 보냄
     func application(_ application: NSApplication, open urls: [URL]) {
         NSLog("DJI2Note openURLs: %@", urls.map(\.absoluteString).joined(separator: ","))
+        // 단축어·자동화용: dji2note://record-start?mode=meeting|inPerson, dji2note://record-stop
+        if let url = urls.first(where: { $0.host == "record-start" }) {
+            let mode = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "mode" }?.value
+            Task { @MainActor in
+                let m = AppModel.shared
+                if let mode, let r = Recorder.Mode(rawValue: mode) { m.recorder.mode = r }
+                await m.recorder.start(in: m.recordingsDir)
+            }
+            return
+        }
+        if urls.contains(where: { $0.host == "record-stop" }) {
+            Task { @MainActor in await AppModel.shared.recorder.stop() }
+            return
+        }
         if urls.contains(where: { $0.host == "process-all" }) {
             Task { @MainActor in AppModel.shared.processAll() }  // 자동화·스크립트용
             return
@@ -80,6 +95,7 @@ struct MenuPanel: View {
             }
 
             DeviceCard(compact: true)
+            if model.setupDone { RecordCard(recorder: model.recorder, compact: true) }
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(model.statusText).font(.callout)

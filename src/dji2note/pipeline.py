@@ -1,5 +1,6 @@
 """녹음 찾기 → 로컬 복사 → 세션 묶기 → 받아쓰기 → 스크립트·요약 → 업로드."""
 import fcntl
+import json
 import re
 import shutil
 import sys
@@ -14,6 +15,7 @@ from .config import Config
 
 # DJI Mic / Mic 2 / Mic Mini 파일명: TX00_MIC025_20260928_112702_orig.wav
 DJI_RE = re.compile(r"^(TX|RX)\d*_MIC(\d+)_(\d{8})_(\d{6})(?:_\w+)?\.wav$", re.I)
+APP_REC_RE = re.compile(r"^(REC|MEET)_(\d{8})_(\d{6})", re.I)
 GROUP_GAP_SEC = 90     # 앞 파일 끝과 이 간격 이내로 이어지면 한 세션(분할 저장 파일)
 MIN_TEXT_CHARS = 40    # 전사가 이보다 짧으면 대화 없음
 
@@ -74,9 +76,14 @@ def duration(path: Path) -> float:
 
 def recording_info(path: Path) -> dict:
     m = DJI_RE.match(path.name)
+    app = APP_REC_RE.match(path.name)
     if m:
         start = datetime.strptime(m.group(3) + m.group(4), "%Y%m%d%H%M%S")
         label = f"MIC{int(m.group(2)):03d}"
+    elif app:
+        # 앱에서 녹음한 파일: REC_20261001_103015.wav(마이크) / MEET_…(온라인 회의)
+        start = datetime.strptime(app.group(2) + app.group(3), "%Y%m%d%H%M%S")
+        label = {"REC": "녹음", "MEET": "온라인회의"}[app.group(1).upper()]
     else:
         start = datetime.fromtimestamp(path.stat().st_mtime)
         label = re.sub(r"[^\w가-힣-]+", "_", path.stem)[:40]
@@ -129,11 +136,24 @@ def group_sessions(recs: list[dict]) -> list[list[dict]]:
     return groups
 
 
-def transcript_doc(title: str, body: str, backend: str) -> str:
+def speakers_for(src: Path) -> list[str] | None:
+    """녹음 옆의 <이름>.json 에 적힌 채널별 화자 이름 (앱 녹음·온라인 회의)."""
+    side = src.with_suffix(".json")
+    if side.exists():
+        try:
+            return json.loads(side.read_text()).get("speakers") or None
+        except ValueError:
+            return None
+    return None
+
+
+def transcript_doc(title: str, body: str, backend: str, speakers: list[str] | None = None) -> str:
     how = "Claude" if backend != "none" else "음량 기준 자동 분리(LLM 미사용 — 부정확할 수 있음)"
+    who = ("- 화자는 **녹음 채널로 구분**: " + ", ".join(f"**{s}**" for s in speakers) + ", `(?)` = 겹쳐 말해 불확실\n"
+           if speakers else "- **A** = 마이크 착용자, **B** = 상대방, `(?)` = 화자 판정 불확실\n")
     return (f"# 대화 스크립트 — {title}\n\n"
             f"- 받아쓰기: Whisper / 화자 분리·교정: {how}\n"
-            "- **A** = 마이크 착용자, **B** = 상대방, `(?)` = 화자 판정 불확실\n"
+            + who +
             "- 음성인식 오류 교정은 `[원문: …]`, 알아듣기 어려운 부분은 `[불명확]`\n\n---\n\n"
             f"{body.strip()}\n")
 
@@ -155,7 +175,8 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
     else:
         inputs = [copy_local(cfg, r) if copy else r["src"] for r in group]
         with tempfile.TemporaryDirectory() as tmp:
-            raw = transcribe.transcribe(inputs, Path(tmp), cfg.whisper_model, cfg.language)
+            raw = transcribe.transcribe(inputs, Path(tmp), cfg.whisper_model, cfg.language,
+                                        speakers=speakers_for(Path(group[0]["src"])))
     if len(re.sub(r"^\[.*?\|", "", raw, flags=re.M).strip()) < MIN_TEXT_CHARS:
         log(f"대화 없음: {folder.name}")
         return {"status": "no_speech"}
@@ -164,10 +185,10 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
     (folder / "raw_whisper.txt").write_text(raw + "\n")
     if cfg.llm_backend == "none":
         body = transcribe.label_by_loudness(raw)
-        (folder / "transcript.md").write_text(transcript_doc(title, body, "none"))
+        (folder / "transcript.md").write_text(transcript_doc(title, body, "none", speakers_for(Path(first["src"]))))
     else:
         body = llm.make_transcript(cfg, raw, log=log, cache_dir=folder / ".chunks")
-        transcript = transcript_doc(title, body, cfg.llm_backend)
+        transcript = transcript_doc(title, body, cfg.llm_backend, speakers_for(Path(first["src"])))
         (folder / "transcript.md").write_text(transcript)
         log(f"요약 작성 중 ({cfg.llm_model or '기본 모델'})")
         (folder / "summary.md").write_text(llm.make_summary(cfg, title, transcript))
@@ -287,6 +308,67 @@ def run(cfg: Config, dry_run: bool = False, include_seen: bool = False, names: l
     if ok or failed:
         notify(cfg, f"{ok}건 정리 완료" + (f" · {failed}건 실패" if failed else "")
                + (" · Google Drive 업로드됨" if ok and cfg.upload == "rclone" else ""))
+
+
+VOICE_MEMOS = Path.home() / "Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings"
+MEMO_EXTS = (".m4a", ".qta", ".wav")
+
+
+def find_voice_memos() -> list[dict]:
+    """Mac 음성 메모(iCloud로 동기화된 iPhone 메모 포함). 녹음 중인 파일은 30초간 변화 없을 때까지 제외.
+
+    이 폴더는 macOS가 보호하므로 '전체 디스크 접근' 권한이 없으면 PermissionError.
+    """
+    now = time.time()
+    recs = []
+    for p in VOICE_MEMOS.iterdir():  # 권한 없으면 여기서 PermissionError
+        if p.suffix.lower() in MEMO_EXTS and now - p.stat().st_mtime > 30:
+            r = recording_info(p)
+            r["key"] = "memo:" + p.name
+            recs.append(r)
+    return sorted(recs, key=lambda r: r["start"])
+
+
+def run_memos(cfg: Config, dry_run: bool = False, skip_existing: bool = False, include_seen: bool = False):
+    """새 음성 메모를 처리한다(앱이 폴더 변화를 감지하면 호출)."""
+    state = config.load_state()
+    try:
+        memos = find_voice_memos()
+    except PermissionError:
+        log("음성 메모 폴더 접근 권한이 없습니다 — 시스템 설정 → 개인정보 보호 및 보안 → 전체 디스크 접근에서 허용")
+        return 2
+    new = [r for r in memos if r["key"] not in state
+           or (include_seen and state[r["key"]].get("status") == "seen")]
+    if skip_existing:
+        now = datetime.now().isoformat(timespec="seconds")
+        for r in new:
+            state[r["key"]] = {"status": "seen", "at": now}
+        config.save_state(state)
+        log(f"기존 음성 메모 {len(new)}개는 건너뜁니다")
+        return 0
+    if dry_run:
+        for r in new:
+            print(f"  {r['start']:%Y-%m-%d %H:%M}  {r['name']}")
+        return 0
+    lock = open(config.LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("이미 실행 중")
+        return 0
+    for i, r in enumerate(new, 1):
+        r["duration"] = duration(r["src"])
+        if r["duration"] <= 5:
+            state[r["key"]] = {"status": "no_speech", "reason": "too_short", "at": datetime.now().isoformat(timespec="seconds")}
+            continue
+        try:
+            res = process_session(cfg, [r], copy=False, index=(i, len(new)))
+            state[r["key"]] = {**res, "at": datetime.now().isoformat(timespec="seconds")}
+        except Exception as e:
+            log(f"실패: {r['name']}: {e}")
+        config.save_state(state)
+    log(f"전체 완료: 음성 메모 {len(new)}개 확인")
+    return 0
 
 
 def mark_seen(names: list[str]):

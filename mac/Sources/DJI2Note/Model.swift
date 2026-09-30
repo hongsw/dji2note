@@ -1,3 +1,4 @@
+import Combine
 import AppKit
 import Foundation
 import ServiceManagement
@@ -143,10 +144,16 @@ final class AppModel: ObservableObject {
     private var unmountObserver: NSObjectProtocol?
 
     static let shared = AppModel()
+    let recorder = Recorder()
+    private var recorderSink: AnyCancellable?
 
     init() {
         startMountWatcher()
         registerMountAgent()
+        recorder.onFinished = { [weak self] files, mode in self?.processRecording(files, mode: mode) }
+        // 녹음 상태가 바뀌면 메뉴바 아이콘 등 AppModel을 보는 화면도 갱신
+        recorderSink = recorder.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
+        startMemosWatcher()
         Task { await refresh() }
     }
 
@@ -318,6 +325,75 @@ final class AppModel: ObservableObject {
     var pendingCount: Int { connected.filter { $0.status == "new" || $0.status == "seen" }.count }
 
     /// 건너뛴 것까지 전부 한 번에: 먼저 모두 복사 → 최신 회의부터 차례로 처리
+    // MARK: 앱 녹음
+
+    var recordingsDir: URL {
+        URL(filePath: config.output_dir.replacingOccurrences(of: "~", with: Paths.home.path)).appending(path: "recordings")
+    }
+
+    /// 녹음이 끝나면 바로 처리 (온라인 회의는 두 파일을 2채널로 합쳐 '나/상대방')
+    func processRecording(_ files: [URL], mode: Recorder.Mode) {
+        switch mode {
+        case .meeting:
+            runPipeline(["process", "--merge-channels", "--speakers", "나,상대방"] + files.map(\.path), title: "온라인 회의 처리")
+        case .inPerson:
+            runPipeline(["process"] + files.map(\.path), title: "녹음 처리")
+        }
+    }
+
+    // MARK: Mac 음성 메모 자동 처리
+
+    static let voiceMemosDir = Paths.home.appending(path: "Library/Group Containers/group.com.apple.VoiceMemos.shared/Recordings")
+
+    @Published var memosEnabled = UserDefaults.standard.bool(forKey: "memosEnabled") {
+        didSet { UserDefaults.standard.set(memosEnabled, forKey: "memosEnabled") }
+    }
+    /// nil = 아직 확인 안 함, false = 전체 디스크 접근 권한 필요
+    @Published var memosAccess: Bool?
+    @Published var memosCount = 0
+    private var memosTimer: Timer?
+    private var memosSignature = ""
+
+    func checkMemosAccess() {
+        if let files = try? FileManager.default.contentsOfDirectory(atPath: Self.voiceMemosDir.path) {
+            memosAccess = true
+            memosCount = files.filter { [".m4a", ".qta", ".wav"].contains(where: $0.lowercased().hasSuffix) }.count
+        } else {
+            memosAccess = false
+        }
+    }
+
+    /// 켤 때: 지금 있는 메모는 건너뛰고 앞으로 새로 녹음한 것만 (기존 것도 원하면 processAllMemos)
+    func enableMemos() async {
+        checkMemosAccess()
+        guard memosAccess == true else { return }
+        await Engine.cli(["memos", "--skip-existing"])
+        memosSignature = memosListSignature()
+        memosEnabled = true
+    }
+
+    func processAllMemos() {
+        runPipeline(["memos", "--all"], title: "음성 메모 처리")
+    }
+
+    private func memosListSignature() -> String {
+        let files = (try? FileManager.default.contentsOfDirectory(atPath: Self.voiceMemosDir.path)) ?? []
+        return files.sorted().joined(separator: "|")
+    }
+
+    /// 30초마다 음성 메모 폴더 목록이 바뀌었는지 보고, 바뀌었으면 엔진에 처리 요청
+    private func startMemosWatcher() {
+        memosTimer = Timer.scheduledTimer(withTimeInterval: 30, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.memosEnabled, self.setupDone, !self.isBusy, !self.recorder.isRecording else { return }
+                let sig = self.memosListSignature()
+                guard !sig.isEmpty, sig != self.memosSignature else { return }
+                self.memosSignature = sig
+                self.runPipeline(["memos"], title: "새 음성 메모 처리")
+            }
+        }
+    }
+
     struct NotionTest: Decodable {
         let ok: Bool
         let type: String?
@@ -364,7 +440,7 @@ final class AppModel: ObservableObject {
         await refresh()
     }
 
-    private func runPipeline(_ args: [String], title: String) {
+    func runPipeline(_ args: [String], title: String) {
         guard !isBusy, engineInstalled else { return }
         isBusy = true
         ownRun = true

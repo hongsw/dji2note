@@ -206,6 +206,17 @@ def cmd_process(args):
     for p in paths:
         if not p.exists():
             sys.exit(f"파일 없음: {p}")
+    if args.merge_channels and len(paths) > 1:
+        # 온라인 회의: 내 마이크·Mac 소리처럼 따로 녹음한 파일을 채널로 합쳐 한 회의로
+        from . import transcribe
+        merged = paths[0].with_name(paths[0].stem.removesuffix("_mic") + ".wav")
+        transcribe.merge_channels(paths, merged)
+        if args.speakers:
+            merged.with_suffix(".json").write_text(json.dumps({"speakers": args.speakers.split(",")}, ensure_ascii=False))
+        paths = [merged]
+    elif args.speakers:
+        for p in paths:
+            p.with_suffix(".json").write_text(json.dumps({"speakers": args.speakers.split(",")}, ensure_ascii=False))
     recs = [pipeline.recording_info(p) | {"duration": pipeline.duration(p)} for p in paths]
     recs.sort(key=lambda r: r["start"])
     groups = [recs] if args.join else [[r] for r in recs]
@@ -316,6 +327,23 @@ def cmd_render(args):
     sys.stdout.write(html)
 
 
+def cmd_memos(args):
+    """Mac 음성 메모 처리. --check 는 폴더 접근 권한만 확인."""
+    if args.check:
+        try:
+            n = len(pipeline.find_voice_memos())
+            print(json.dumps({"ok": True, "count": n, "path": str(pipeline.VOICE_MEMOS)}, ensure_ascii=False))
+            return 0
+        except PermissionError:
+            print(json.dumps({"ok": False, "error": "permission", "path": str(pipeline.VOICE_MEMOS)}))
+            return 1
+        except FileNotFoundError:
+            print(json.dumps({"ok": False, "error": "missing", "path": str(pipeline.VOICE_MEMOS)}))
+            return 1
+    return pipeline.run_memos(config.load(), dry_run=args.dry_run, skip_existing=args.skip_existing,
+                              include_seen=args.all)
+
+
 def cmd_notion(args):
     """Notion 연결 확인: 토큰과 회의록 페이지(또는 DB)에 접근되는지."""
     cfg = config.load()
@@ -406,6 +434,8 @@ def main():
     p = sub.add_parser("process", help="오디오 파일을 직접 처리")
     p.add_argument("files", nargs="+")
     p.add_argument("--join", action="store_true", help="여러 파일을 한 대화로 이어 붙임")
+    p.add_argument("--merge-channels", action="store_true", help="여러 파일을 채널로 합쳐 한 대화로(온라인 회의)")
+    p.add_argument("--speakers", help="채널별 화자 이름, 쉼표로 (예: 나,상대방)")
     p.set_defaults(fn=cmd_process)
     p = sub.add_parser("upload", help="결과 폴더를 Drive에 다시 올림")
     p.add_argument("folder")
@@ -428,6 +458,12 @@ def main():
     p.add_argument("names", nargs="*")
     p.add_argument("--all-new", action="store_true", help="연결된 DJI의 새 녹음 전부")
     p.set_defaults(fn=cmd_skip)
+    p = sub.add_parser("memos", help="Mac 음성 메모의 새 녹음 처리")
+    p.add_argument("--check", action="store_true", help="폴더 접근 권한 확인(JSON)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--skip-existing", action="store_true", help="지금 있는 메모는 처리하지 않고 건너뛰기")
+    p.add_argument("--all", action="store_true", help="건너뛰기 표시한 메모까지 처리")
+    p.set_defaults(fn=cmd_memos)
     p = sub.add_parser("notion", help="Notion 연결 확인 (--token, --parent 로 저장 전 시험 가능)")
     p.add_argument("--token")
     p.add_argument("--parent")
