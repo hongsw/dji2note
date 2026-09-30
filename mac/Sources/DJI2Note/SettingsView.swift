@@ -48,7 +48,7 @@ struct HistoryTab: View {
                 .help("DJI를 연결했을 때 할 일")
                 if model.pendingCount > 0 {
                     Button { model.processAll() } label: {
-                        Label("모두 처리 (\(model.pendingCount))", systemImage: "play.fill")
+                        Label("모두 처리 (녹음 \(model.pendingCount)개)", systemImage: "play.fill")
                     }
                     .buttonStyle(.borderedProminent)
                     .disabled(model.isBusy)
