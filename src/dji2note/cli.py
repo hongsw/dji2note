@@ -217,6 +217,12 @@ def cmd_process(args):
     elif args.speakers:
         for p in paths:
             p.with_suffix(".json").write_text(json.dumps({"speakers": args.speakers.split(",")}, ensure_ascii=False))
+    if args.situation:
+        for p in paths:
+            side = p.with_suffix(".json")
+            data = json.loads(side.read_text()) if side.exists() else {}
+            data["situation"] = args.situation
+            side.write_text(json.dumps(data, ensure_ascii=False))
     recs = [pipeline.recording_info(p) | {"duration": pipeline.duration(p)} for p in paths]
     recs.sort(key=lambda r: r["start"])
     groups = [recs] if args.join else [[r] for r in recs]
@@ -344,6 +350,83 @@ def cmd_memos(args):
                               include_seen=args.all)
 
 
+def cmd_notes(args):
+    """회의록 목록: 주제·상황·길이·화자 수·링크 (앱 목록용)."""
+    from . import situations
+    cfg = config.load()
+    state = config.load_state()
+    links: dict[str, dict] = {}
+    for v in state.values():
+        if v.get("notes"):
+            d = links.setdefault(v["notes"], {})
+            for k in ("drive_url", "notion_url", "at"):
+                if v.get(k):
+                    d[k] = v[k]
+    rows = []
+    if cfg.notes_dir.exists():
+        for folder in sorted(cfg.notes_dir.iterdir(), reverse=True):
+            if not folder.is_dir() or not (folder / "transcript.md").exists():
+                continue
+            meta = pipeline.read_meta(folder)
+            rows.append({"folder": str(folder), "name": folder.name, **meta,
+                         "duration_text": pipeline.fmt_duration(meta["duration"]),
+                         "situation_title": situations.get(meta["situation"])["title"] if meta["situation"] else "",
+                         **links.get(str(folder), {})})
+    if args.json:
+        print(json.dumps(rows, ensure_ascii=False))
+    else:
+        for r in rows:
+            print(f"{r['name']:40} {r['duration_text']:>14}  {r['speakers']}명  {r['situation_title']:8} {r['topic'][:40]}")
+
+
+def cmd_backfill(args):
+    """이전 버전 회의록에 meta.json(길이·화자 수·주제·상황) 채우기. 상황은 AI로 판별."""
+    cfg = config.load()
+    for folder in sorted(cfg.notes_dir.iterdir()):
+        if not folder.is_dir() or not (folder / "transcript.md").exists():
+            continue
+        if (folder / "meta.json").exists() and not args.force:
+            continue
+        meta = pipeline.read_meta(folder)
+        raw = (folder / "raw_whisper.txt").read_text() if (folder / "raw_whisper.txt").exists() else ""
+        if cfg.llm_backend != "none" and raw:
+            meta["situation"] = llm.classify(cfg, raw, hint=meta.get("topic", ""))
+        (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
+        pipeline.log(f"채움: {folder.name} — {meta['situation']} · {pipeline.fmt_duration(meta['duration'])} · {meta['speakers']}명")
+
+
+def cmd_situations(_args):
+    from . import situations
+    print(json.dumps([{"key": k, "title": v["title"], "icon": v["icon"], "capture": v["capture"]}
+                      for k, v in situations.SITUATIONS.items()], ensure_ascii=False))
+
+
+def cmd_resummarize(args):
+    """상황을 바꿔 요약을 다시 만든다 (대본은 그대로). Drive는 다시 올린다."""
+    from . import situations
+    cfg = config.load()
+    folder = Path(args.folder).expanduser()
+    if not folder.exists():
+        folder = cfg.notes_dir / args.folder
+    transcript = (folder / "transcript.md").read_text()
+    title = transcript.splitlines()[0].split("—", 1)[-1].strip()
+    sit = args.situation
+    pipeline.log(f"처리 시작: {folder.name} (상황: {situations.get(sit)['title']}로 다시 요약)")
+    pipeline.log(f"요약 작성 중 ({cfg.llm_model or '기본 모델'})")
+    (folder / "summary.md").write_text(llm.make_summary(cfg, title, transcript, sit))
+    meta = pipeline.read_meta(folder)
+    meta["situation"] = sit
+    meta.pop("topic", None)
+    meta = {**meta, **{k: v for k, v in pipeline.read_meta(folder).items() if k == "topic"}}
+    summary = (folder / "summary.md").read_text()
+    meta["topic"] = next((l.replace("**", "").split("주제:", 1)[-1].strip() for l in summary.splitlines() if "주제:" in l), "")
+    (folder / "meta.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1))
+    pipeline.log(f"저장: {folder}")
+    if cfg.upload == "rclone":
+        pipeline.log(f"업로드: {upload.upload(cfg, folder)}")
+    pipeline.log("전체 완료: 다시 요약 1건")
+
+
 def cmd_notion(args):
     """Notion 연결 확인: 토큰과 회의록 페이지(또는 DB)에 접근되는지."""
     cfg = config.load()
@@ -436,6 +519,7 @@ def main():
     p.add_argument("--join", action="store_true", help="여러 파일을 한 대화로 이어 붙임")
     p.add_argument("--merge-channels", action="store_true", help="여러 파일을 채널로 합쳐 한 대화로(온라인 회의)")
     p.add_argument("--speakers", help="채널별 화자 이름, 쉼표로 (예: 나,상대방)")
+    p.add_argument("--situation", help="녹음 상황 (meeting, online, lecture, interview …)")
     p.set_defaults(fn=cmd_process)
     p = sub.add_parser("upload", help="결과 폴더를 Drive에 다시 올림")
     p.add_argument("folder")
@@ -458,6 +542,17 @@ def main():
     p.add_argument("names", nargs="*")
     p.add_argument("--all-new", action="store_true", help="연결된 DJI의 새 녹음 전부")
     p.set_defaults(fn=cmd_skip)
+    p = sub.add_parser("notes", help="회의록 목록(주제·상황·길이·화자 수)")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(fn=cmd_notes)
+    sub.add_parser("situations", help="녹음 상황 목록(JSON)").set_defaults(fn=cmd_situations)
+    p = sub.add_parser("backfill", help="이전 회의록에 길이·화자 수·상황 정보 채우기")
+    p.add_argument("--force", action="store_true", help="이미 있어도 상황을 다시 판별")
+    p.set_defaults(fn=cmd_backfill)
+    p = sub.add_parser("resummarize", help="상황을 바꿔 요약 다시 만들기")
+    p.add_argument("folder")
+    p.add_argument("--situation", required=True)
+    p.set_defaults(fn=cmd_resummarize)
     p = sub.add_parser("memos", help="Mac 음성 메모의 새 녹음 처리")
     p.add_argument("--check", action="store_true", help="폴더 접근 권한 확인(JSON)")
     p.add_argument("--dry-run", action="store_true")
@@ -495,7 +590,7 @@ def main():
     import signal
     # '중지' 버튼(SIGTERM)에도 정리 코드(atexit: running.json 삭제)가 돌도록
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    if args.cmd in ("run", "process", "memos", "publish") and not getattr(args, "dry_run", False) \
+    if args.cmd in ("run", "process", "memos", "publish", "resummarize") and not getattr(args, "dry_run", False) \
             and not getattr(args, "check", False):
         pipeline.mark_running()
         if config.load().low_power:

@@ -23,6 +23,7 @@ class Config:
     llm_model: str = "claude-sonnet-5"          # 요약
     llm_fast_model: str = "claude-sonnet-5"     # 대본 교정(출력이 길어 빠른 모델) — 비우면 llm_model 사용
     llm_parallel: int = 4                       # 대본 조각 동시 처리 수
+    default_situation: str = "auto"             # DJI·음성 메모의 녹음 상황 (auto = AI가 판별)
     low_power: bool = False                     # 저전력: 우선순위 낮춤 + AI 동시 처리 2개로
     anthropic_api_key: str = ""
     openai_api_key: str = ""

@@ -149,15 +149,59 @@ def group_sessions(recs: list[dict]) -> list[list[dict]]:
     return groups
 
 
-def speakers_for(src: Path) -> list[str] | None:
-    """녹음 옆의 <이름>.json 에 적힌 채널별 화자 이름 (앱 녹음·온라인 회의)."""
+def sidecar(src: Path) -> dict:
+    """녹음 옆의 <이름>.json — 채널별 화자 이름(speakers), 상황(situation). 앱 녹음이 만든다."""
     side = src.with_suffix(".json")
     if side.exists():
         try:
-            return json.loads(side.read_text()).get("speakers") or None
+            return json.loads(side.read_text())
         except ValueError:
-            return None
-    return None
+            return {}
+    return {}
+
+
+def speakers_for(src: Path) -> list[str] | None:
+    return sidecar(src).get("speakers") or None
+
+
+SPEAKER_RE = re.compile(r"^\*\*\[[\d:]+\] ([^:*]+?):\*\*", re.M)
+
+
+def count_speakers(transcript: str) -> int:
+    """대본의 '**[00:00] 이름:**' 에서 서로 다른 화자 수 ('(?)' 표시는 같은 사람으로)."""
+    names = {re.sub(r"\s*\(\?\)\s*$", "", n).strip() for n in SPEAKER_RE.findall(transcript)}
+    return len({n for n in names if n and n != "?"})
+
+
+def fmt_duration(sec: float) -> str:
+    s = int(sec)
+    h, m, s = s // 3600, s // 60 % 60, s % 60
+    return f"{h}시간 {m}분 {s}초" if h else f"{m}분 {s}초"
+
+
+def read_meta(folder: Path) -> dict:
+    """회의록 폴더의 meta.json. 없으면(이전 버전) 대본·요약에서 계산해 채운다."""
+    meta = {}
+    if (folder / "meta.json").exists():
+        try:
+            meta = json.loads((folder / "meta.json").read_text())
+        except ValueError:
+            meta = {}
+    transcript = (folder / "transcript.md").read_text() if (folder / "transcript.md").exists() else ""
+    summary = (folder / "summary.md").read_text() if (folder / "summary.md").exists() else ""
+    if "duration" not in meta:
+        head = (transcript or summary).split("\n", 1)[0]
+        m = re.search(r"(?:(\d+)시간 )?(\d+)분(?: (\d+)초)?", head)
+        meta["duration"] = (int(m.group(1) or 0) * 3600 + int(m.group(2)) * 60 + int(m.group(3) or 0)) if m else 0
+    if "speakers" not in meta:
+        meta["speakers"] = count_speakers(transcript)
+    if "topic" not in meta:
+        line = next((l for l in summary.splitlines() if "주제:" in l), "")
+        meta["topic"] = line.replace("**", "").split("주제:", 1)[-1].strip() if line else ""
+    m = re.match(r"(\d{4}-\d{2}-\d{2})_(\d{2})(\d{2})", folder.name)
+    meta.setdefault("start", f"{m.group(1)}T{m.group(2)}:{m.group(3)}:00" if m else "")
+    meta.setdefault("situation", "")
+    return meta
 
 
 def transcript_doc(title: str, body: str, backend: str, speakers: list[str] | None = None) -> str:
@@ -196,19 +240,31 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
 
     folder.mkdir(parents=True, exist_ok=True)
     (folder / "raw_whisper.txt").write_text(raw + "\n")
+    from . import situations
+    situation = sidecar(Path(first["src"])).get("situation") or cfg.default_situation
+    if situation == "auto" and cfg.llm_backend != "none":
+        situation = llm.classify(cfg, raw)
+    log(f"상황: {situations.get(situation)['title']}")
     if cfg.llm_backend == "none":
         body = transcribe.label_by_loudness(raw)
         (folder / "transcript.md").write_text(transcript_doc(title, body, "none", speakers_for(Path(first["src"]))))
     else:
-        body = llm.make_transcript(cfg, raw, log=log, cache_dir=folder / ".chunks")
+        body = llm.make_transcript(cfg, raw, log=log, cache_dir=folder / ".chunks", situation=situation)
         transcript = transcript_doc(title, body, cfg.llm_backend, speakers_for(Path(first["src"])))
         (folder / "transcript.md").write_text(transcript)
         log(f"요약 작성 중 ({cfg.llm_model or '기본 모델'})")
-        (folder / "summary.md").write_text(llm.make_summary(cfg, title, transcript))
+        (folder / "summary.md").write_text(llm.make_summary(cfg, title, transcript, situation))
         shutil.rmtree(folder / ".chunks", ignore_errors=True)  # 다 끝났으면 조각 캐시 정리
+    transcript_text = (folder / "transcript.md").read_text()
+    summary_text = (folder / "summary.md").read_text() if (folder / "summary.md").exists() else ""
+    topic = next((l.replace("**", "").split("주제:", 1)[-1].strip() for l in summary_text.splitlines() if "주제:" in l), "")
+    (folder / "meta.json").write_text(json.dumps({
+        "situation": situation, "duration": round(total), "start": first["start"].isoformat(),
+        "speakers": count_speakers(transcript_text), "topic": topic,
+        "files": [r["name"] for r in group]}, ensure_ascii=False, indent=1))
     log(f"저장: {folder}")
 
-    result = {"status": "done", "notes": str(folder)}
+    result = {"status": "done", "notes": str(folder), "situation": situation}
     if cfg.upload == "rclone":
         result["drive"] = upload.upload(cfg, folder)
         result["drive_url"] = upload.folder_url(cfg, folder.name)

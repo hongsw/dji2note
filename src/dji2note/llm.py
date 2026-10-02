@@ -28,29 +28,41 @@ TRANSCRIPT_PROMPT = """아래는 마이크로 녹음한 대화(DJI 무선 마이
 {raw}
 """
 
-SUMMARY_PROMPT = """아래는 대화 스크립트다(화자 이름은 스크립트에 표시된 대로. A/B면 A=마이크 착용자, B=상대방). 회의록 요약을 Markdown으로 작성하라.
+SUMMARY_PROMPT = """아래는 {kind} 스크립트다(화자 이름은 스크립트에 표시된 대로. A/B면 A=마이크 착용자, B=상대방).
+{kind} 기록을 Markdown으로 작성하라.
 
 형식:
-# 대화 요약 — {title}
+# {heading} — {title}
 
-**참석:** (A/B가 각각 어떤 역할로 보이는지 한 줄)
+**참석:** (화자가 각각 어떤 역할로 보이는지 한 줄)
 **주제:** (한 줄)
 
-## 한 줄 요약
-## 주요 내용
-(주제별 ### 소제목 + 불릿. 수치·고유명사·제품명·도메인은 정확히)
-## 결정 사항
-## 할 일 (Action Items)
-| 담당 | 할 일 | 기한 |
-|---|---|---|
+{sections}
 ## 참고
 (화자 추정의 한계, 사실 확인이 필요한 점. 없으면 생략)
 
-대화에 없는 내용은 지어내지 말 것. 잡담뿐이면 짧게 그렇다고만 쓸 것.
-스크립트와 같은 언어로 작성. 출력: Markdown만(코드블록으로 감싸지 말 것).
+수치·고유명사·제품명·도메인은 정확히. 대화에 없는 내용은 지어내지 말 것. 해당 내용이 없는 절은 생략.
+잡담뿐이면 짧게 그렇다고만 쓸 것. 스크립트와 같은 언어로 작성. 출력: Markdown만(코드블록으로 감싸지 말 것).
 
 스크립트:
 {transcript}
+"""
+
+CLASSIFY_PROMPT = """아래는 녹음을 받아쓴 원문에서 앞·중간·끝을 뽑은 것이다. 어떤 상황의 녹음인지 아래 목록에서
+하나만 골라 그 영문 키만 출력하라(설명 없이).
+
+{choices}
+
+구분 기준:
+- 한 사람이 여러 사람에게 개념·방법을 가르치거나 실습을 이끌면 lecture (교육·수업·워크숍 포함)
+- 채용·면접·경력 질문이 중심이면 interview
+- 한 사람이 준비된 내용을 발표하고 질문을 받으면 seminar
+- 여럿이 안건을 논의하고 결정하면 meeting, 아이디어 내기가 중심이면 brainstorm
+- 고객·외부 상대의 요구를 듣고 제안하면 consult
+- 혼잣말·생각 정리·브이로그 내레이션이면 memo
+{hint}
+원문:
+{raw}
 """
 
 
@@ -202,13 +214,38 @@ def _chunks(raw: str):
         yield "\n".join(chunk)
 
 
-def make_transcript(cfg: Config, raw: str, log=print, cache_dir: Path | None = None) -> str:
+def classify(cfg: Config, raw: str, hint: str = "") -> str:
+    """녹음 상황 자동 판별 (빠른 모델). 앞부분 잡담에 휘둘리지 않게 앞·중간·끝을 고르게 본다."""
+    from . import situations
+    n = len(raw)
+    sample = raw if n <= 9000 else "\n…\n".join(raw[i:i + 3000] for i in (0, n // 2 - 1500, n - 3000))
+    try:
+        out = ask(cfg, CLASSIFY_PROMPT.format(choices=situations.choices_text(), raw=sample,
+                                              hint=f"참고(요약의 주제): {hint}\n" if hint else ""),
+                  cfg.llm_fast_model or cfg.llm_model).strip().lower()
+    except Exception:
+        return "meeting"
+    for key in situations.SITUATIONS:
+        if key != "auto" and key in out:
+            return key
+    return "meeting"
+
+
+def make_transcript(cfg: Config, raw: str, log=print, cache_dir: Path | None = None, situation: str = "meeting") -> str:
     """조각을 동시에 교정한다. 순서는 원래대로 이어 붙인다.
 
     cache_dir을 주면 끝난 조각을 저장해 두고, 중단 후 다시 실행할 때 그 조각은 건너뛴다.
     """
     import hashlib
     from concurrent.futures import ThreadPoolExecutor, as_completed
+
+    from . import situations
+    sit = situations.get(situation)
+    hint = (f"\n\n이 녹음의 상황: {sit['title']}. 화자 이름은 {sit['speakers']} 표기하라."
+            if sit.get("speakers") else "")
+
+    def prompt_for(chunk: str) -> str:
+        return TRANSCRIPT_PROMPT.format(raw=chunk).replace("\n원문:\n", hint + "\n\n원문:\n", 1)
 
     chunks = list(_chunks(raw))
     model = cfg.llm_fast_model or cfg.llm_model
@@ -233,7 +270,7 @@ def make_transcript(cfg: Config, raw: str, log=print, cache_dir: Path | None = N
     if cache_dir:
         cache_dir.mkdir(parents=True, exist_ok=True)
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(ask, cfg, TRANSCRIPT_PROMPT.format(raw=chunks[i]), model): i for i in todo}
+        futures = {pool.submit(ask, cfg, prompt_for(chunks[i]), model): i for i in todo}
         for f in as_completed(futures):
             i = futures[f]
             results[i] = f.result().strip()
@@ -244,5 +281,13 @@ def make_transcript(cfg: Config, raw: str, log=print, cache_dir: Path | None = N
     return "\n\n".join(results) + "\n"
 
 
-def make_summary(cfg: Config, title: str, transcript: str) -> str:
-    return ask(cfg, SUMMARY_PROMPT.format(title=title, transcript=transcript))
+def make_summary(cfg: Config, title: str, transcript: str, situation: str = "meeting") -> str:
+    from . import situations
+    sit = situations.get(situation if situation != "auto" else "meeting")
+    kind = {"lecture": "강의", "interview": "인터뷰", "seminar": "발표", "memo": "개인 메모",
+            "call": "통화", "consult": "상담", "brainstorm": "브레인스토밍"}.get(situation, "대화")
+    heading = {"lecture": "강의 노트", "interview": "인터뷰 요약", "seminar": "발표 요약",
+               "memo": "메모 정리", "call": "통화 요약", "consult": "상담 요약",
+               "brainstorm": "아이디어 회의 요약"}.get(situation, "대화 요약")
+    return ask(cfg, SUMMARY_PROMPT.format(kind=kind, heading=heading, title=title,
+                                          sections=sit["sections"], transcript=transcript))

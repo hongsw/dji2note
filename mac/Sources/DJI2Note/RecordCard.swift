@@ -21,10 +21,23 @@ struct RecordCard: View {
     private var idle: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Picker("", selection: $recorder.mode) {
-                    ForEach(Recorder.Mode.allCases) { Text($0.title).tag($0) }
+                Picker("", selection: Binding(
+                    get: { recorder.situation },
+                    set: { key in
+                        recorder.situation = key
+                        // 온라인 회의·통화는 Mac 소리(상대방)도 함께
+                        let capture = model.situations.first { $0.key == key }?.capture ?? "mic"
+                        recorder.mode = capture == "mic+system" ? .meeting : .inPerson
+                    })) {
+                    ForEach(model.situations) { s in Label(s.title, systemImage: s.icon).tag(s.key) }
                 }
-                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                .labelsHidden().fixedSize()
+                .help("녹음 상황 — 요약 형식과 화자 이름이 상황에 맞게 바뀝니다")
+                Toggle("Mac 소리도", isOn: Binding(
+                    get: { recorder.mode == .meeting },
+                    set: { recorder.mode = $0 ? .meeting : .inPerson }))
+                    .toggleStyle(.checkbox)
+                    .help("온라인 회의·통화 상대방 목소리(Mac에서 나는 소리)를 따로 녹음해 '나/상대방'으로 정확히 나눕니다")
                 Spacer()
                 Button {
                     Task { await recorder.start(in: model.recordingsDir) }
@@ -52,7 +65,8 @@ struct RecordCard: View {
             HStack(spacing: 8) {
                 Circle().fill(.red).frame(width: 10, height: 10)
                     .opacity(pulse ? 1 : 0.3)
-                Text("\(recorder.mode.title) 녹음 중").font(.callout.weight(.semibold))
+                Text("\(model.situationTitle(recorder.situation).isEmpty ? recorder.mode.title : model.situationTitle(recorder.situation)) 녹음 중")
+                    .font(.callout.weight(.semibold))
                 TimelineView(.periodic(from: .now, by: 1)) { _ in
                     Text(elapsed).font(.callout.monospacedDigit()).foregroundStyle(.secondary)
                 }

@@ -59,6 +59,7 @@ struct HistoryRow: View {
     let item: HistoryItem
     var compact = false
     @Environment(\.openWindow) private var openWindow
+    @EnvironmentObject var model: AppModel
     @State private var copied: NoteDoc?
 
     var body: some View {
@@ -67,7 +68,7 @@ struct HistoryRow: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(topic ?? folderName).font(compact ? .callout.weight(.medium) : .body.weight(.medium))
                         .lineLimit(compact ? 1 : 2)
-                    Text(subtitle).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    subtitle.font(.caption).foregroundStyle(.secondary).lineLimit(1)
                 }
                 Spacer()
                 if let folder = item.entry.notes {
@@ -93,6 +94,21 @@ struct HistoryRow: View {
         }
         .buttonStyle(.borderless)
         .padding(.vertical, 2)
+        .contextMenu {
+            if let folder = item.entry.notes {
+                Menu("상황 바꿔서 다시 요약") {
+                    ForEach(model.situations.filter { $0.key != "auto" }) { s in
+                        Button {
+                            model.resummarize(folder, situation: s.key)
+                        } label: {
+                            Label(s.title + (s.key == item.meta?.situation ? " (지금)" : ""), systemImage: s.icon)
+                        }
+                    }
+                }
+                .disabled(model.isBusy)
+                Button("Finder에서 보기") { NSWorkspace.shared.open(URL(filePath: folder)) }
+            }
+        }
     }
 
     /// [요약 보기 | 복사] 한 묶음
@@ -129,14 +145,30 @@ struct HistoryRow: View {
         item.entry.notes.map { URL(filePath: $0).lastPathComponent } ?? item.name
     }
 
-    private var topic: String? { item.entry.notes.flatMap(Notes.topic(folder:)) }
+    private var topic: String? {
+        if let t = item.meta?.topic, !t.isEmpty { return t }
+        return item.entry.notes.flatMap(Notes.topic(folder:))
+    }
 
-    /// "2026-09-28 11:27 · MIC025"
-    private var subtitle: String {
+    /// "2026-09-28 11:27 · ⏱ 17분 14초 · 👥 2명 · 대면 회의"
+    private var subtitle: Text {
         let parts = folderName.split(separator: "_")
-        guard parts.count >= 3, parts[1].count == 4 else { return folderName }
-        let t = parts[1]
-        return "\(parts[0]) \(t.prefix(2)):\(t.suffix(2)) · " + parts[2...].joined(separator: "_")
+        var when = folderName
+        if parts.count >= 2, parts[1].count == 4 {
+            when = "\(parts[0].dropFirst(5).replacingOccurrences(of: "-", with: "/")) \(parts[1].prefix(2)):\(parts[1].suffix(2))"
+        }
+        var t = Text(when)
+        if let d = item.meta?.duration_text, (item.meta?.duration ?? 0) > 0 {
+            t = t + Text("  \(Image(systemName: "clock")) \(d)")
+        }
+        if let n = item.meta?.speakers, n > 0 {
+            t = t + Text("  \(Image(systemName: "person.2")) \(n)명")
+        }
+        if let s = item.meta?.situation, !s.isEmpty {
+            let icon = model.situations.first { $0.key == s }?.icon ?? "tag"
+            t = t + Text("  \(Image(systemName: icon)) \(item.meta?.situation_title ?? model.situationTitle(s))")
+        }
+        return t
     }
 }
 

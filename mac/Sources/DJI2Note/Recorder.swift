@@ -27,6 +27,10 @@ final class Recorder: NSObject, ObservableObject {
     @Published var mode: Mode = Mode(rawValue: UserDefaults.standard.string(forKey: "recMode") ?? "") ?? .inPerson {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: "recMode") }
     }
+    /// 녹음 상황(엔진 situations 키). 온라인 회의·통화를 고르면 Mac 소리도 함께 녹음
+    @Published var situation: String = UserDefaults.standard.string(forKey: "recSituation") ?? "meeting" {
+        didSet { UserDefaults.standard.set(situation, forKey: "recSituation") }
+    }
     @Published private(set) var isRecording = false
     @Published private(set) var startedAt: Date?
     @Published private(set) var micLevel: Float = 0     // 0…1

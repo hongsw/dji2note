@@ -28,6 +28,7 @@ struct EngineConfig: Codable, Equatable {
     var notion_token: String?
     var notion_parent: String?
     var low_power: Bool?
+    var default_situation: String?
 
     struct Provider: Codable, Equatable {
         let title: String
@@ -78,9 +79,48 @@ struct HistoryEntry: Codable {
     let at: String?
 }
 
+/// `dji2note notes --json` 한 줄: 회의록 폴더의 주제·상황·길이·화자 수
+struct NoteMeta: Codable {
+    let folder: String
+    let name: String
+    let topic: String?
+    let situation: String?
+    let situation_title: String?
+    let duration: Double?
+    let duration_text: String?
+    let speakers: Int?
+    let start: String?
+    let drive_url: String?
+    let notion_url: String?
+    let at: String?
+}
+
+/// 녹음 상황 (엔진 `situations` 목록)
+struct Situation: Codable, Identifiable, Hashable {
+    let key: String
+    let title: String
+    let icon: String
+    let capture: String
+    var id: String { key }
+
+    static let fallback: [Situation] = [
+        .init(key: "auto", title: "자동 판별", icon: "wand.and.stars", capture: "mic"),
+        .init(key: "meeting", title: "대면 회의", icon: "person.3", capture: "mic"),
+        .init(key: "online", title: "온라인 회의", icon: "video", capture: "mic+system"),
+        .init(key: "lecture", title: "강의·수업", icon: "graduationcap", capture: "mic"),
+        .init(key: "interview", title: "인터뷰·면접", icon: "person.crop.circle.badge.questionmark", capture: "mic"),
+        .init(key: "consult", title: "상담·고객 미팅", icon: "bubble.left.and.bubble.right", capture: "mic"),
+        .init(key: "brainstorm", title: "브레인스토밍", icon: "lightbulb", capture: "mic"),
+        .init(key: "seminar", title: "발표·세미나", icon: "person.wave.2", capture: "mic"),
+        .init(key: "call", title: "통화", icon: "phone", capture: "mic+system"),
+        .init(key: "memo", title: "개인 메모", icon: "note.text", capture: "mic"),
+    ]
+}
+
 struct HistoryItem: Identifiable {
     let name: String
     let entry: HistoryEntry
+    var meta: NoteMeta?
     var id: String { name }
 }
 
@@ -383,7 +423,29 @@ final class AppModel: ObservableObject {
         }
     }
 
+    @Published var situations: [Situation] = Situation.fallback
+
+    func situationTitle(_ key: String?) -> String {
+        situations.first { $0.key == key }?.title ?? ""
+    }
+
+    /// 상황을 바꿔 요약 다시 만들기
+    func resummarize(_ folder: String, situation: String) {
+        runPipeline(["resummarize", folder, "--situation", situation], title: "다시 요약")
+    }
+
     func refreshHistory() async {
+        if let s = await Engine.json(["situations"], as: [Situation].self), !s.isEmpty { situations = s }
+        // 새 엔진: 회의록 폴더 기준 목록(길이·화자 수·상황 포함)
+        if let rows = await Engine.json(["notes", "--json"], as: [NoteMeta].self) {
+            history = rows.map { r in
+                HistoryItem(name: r.name,
+                            entry: HistoryEntry(status: "done", notes: r.folder, drive: nil,
+                                                drive_url: r.drive_url, notion_url: r.notion_url, at: r.at),
+                            meta: r)
+            }
+            return
+        }
         let dict = await Engine.json(["list", "--json"], as: [String: HistoryEntry].self) ?? [:]
         // 30분 단위로 나뉜 파일들은 같은 회의록 폴더를 가리키므로 폴더 기준으로 한 줄만
         var seen = Set<String>()
@@ -440,11 +502,14 @@ final class AppModel: ObservableObject {
 
     /// 녹음이 끝나면 바로 처리 (온라인 회의는 두 파일을 2채널로 합쳐 '나/상대방')
     func processRecording(_ files: [URL], mode: Recorder.Mode) {
+        let sit = ["--situation", recorder.situation]
+        let title = situationTitle(recorder.situation)
         switch mode {
         case .meeting:
-            runPipeline(["process", "--merge-channels", "--speakers", "나,상대방"] + files.map(\.path), title: "온라인 회의 처리")
+            runPipeline(["process", "--merge-channels", "--speakers", "나,상대방"] + sit + files.map(\.path),
+                        title: "\(title.isEmpty ? "온라인 회의" : title) 처리")
         case .inPerson:
-            runPipeline(["process"] + files.map(\.path), title: "녹음 처리")
+            runPipeline(["process"] + sit + files.map(\.path), title: "\(title.isEmpty ? "녹음" : title) 처리")
         }
     }
 

@@ -20,6 +20,12 @@ struct GeneralSection: View {
             Picker("대화 언어", selection: binding(\.language, key: "language")) {
                 ForEach(languages, id: \.0) { Text($0.1).tag($0.0) }
             }
+            Picker("DJI·음성 메모 녹음의 상황", selection: Binding(
+                get: { model.config.default_situation ?? "auto" },
+                set: { v in Task { await model.set(["default_situation": v]) } })) {
+                ForEach(model.situations) { s in Label(s.title, systemImage: s.icon).tag(s.key) }
+            }
+            .help("자동 판별이면 AI가 녹음 내용을 보고 강의·면접·회의 등을 고릅니다")
             Toggle("저전력 모드 — 처리 중에도 다른 작업이 덜 느려지게(대신 처리는 느려짐)", isOn: Binding(
                 get: { model.config.low_power ?? false },
                 set: { v in Task { await model.set(["low_power": v ? "true" : "false"]) } }))
