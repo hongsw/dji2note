@@ -491,6 +491,15 @@ def main():
 
     tools.setup_path()
     args = ap.parse_args()
+    import os
+    import signal
+    # '중지' 버튼(SIGTERM)에도 정리 코드(atexit: running.json 삭제)가 돌도록
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
+    if args.cmd in ("run", "process", "memos", "publish") and not getattr(args, "dry_run", False) \
+            and not getattr(args, "check", False):
+        pipeline.mark_running()
+        if config.load().low_power:
+            os.nice(10)  # 다른 앱이 먼저 CPU를 쓰게
     try:
         return args.fn(args)
     except KeyboardInterrupt:

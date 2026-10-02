@@ -54,8 +54,28 @@ def _duration(path: Path) -> float:
     return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3)) if m else 0.0
 
 
+class _ProgressTqdm:
+    """mlx_whisper의 tqdm 대신: 5% 단위로 '받아쓰기 [42%]'를 로그에 남겨 앱이 다시 켜져도 진행률을 안다."""
+
+    def __init__(self, log, total=None, **_):
+        self.total, self.n, self.last, self.log = total or 1, 0, -5, log
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        self.log("받아쓰기 [100%]")
+
+    def update(self, k=1):
+        self.n += k
+        pct = int(self.n * 100 / self.total)
+        if pct >= self.last + 5:
+            self.last = pct - pct % 5
+            self.log(f"받아쓰기 [{self.last}%]")
+
+
 def transcribe(inputs: list[Path], workdir: Path, model: str, language: str,
-               speakers: list[str] | None = None) -> str:
+               speakers: list[str] | None = None, progress_log=None) -> str:
     """'[시각] 음량dB | 텍스트' 줄들을 반환.
 
     2채널 이상 녹음(DJI 수신기 분리 채널, 온라인 회의)이면 구간마다 가장 큰 채널로 화자를 정해
@@ -66,6 +86,7 @@ def transcribe(inputs: list[Path], workdir: Path, model: str, language: str,
 
     mono = workdir / "audio16k.wav"
     to_mono16k(inputs, mono)
+    log = progress_log or (lambda m: None)
     nch = channel_count(inputs[0]) if len(inputs) == 1 else 1
     chans = None
     if nch >= 2:
@@ -75,9 +96,17 @@ def transcribe(inputs: list[Path], workdir: Path, model: str, language: str,
         with wave.open(str(multi)) as w:
             chans = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32).reshape(-1, nch).T / 32768
         names = (speakers or []) + [chr(ord("A") + i) for i in range(len(speakers or []), nch)]
-    result = mlx_whisper.transcribe(str(mono), path_or_hf_repo=model,
-                                    language=None if language == "auto" else language,
-                                    condition_on_previous_text=False)
+    import importlib
+    mwt = importlib.import_module("mlx_whisper.transcribe")  # 패키지의 transcribe 함수가 아닌 모듈
+    original = mwt.tqdm.tqdm
+    if progress_log:
+        mwt.tqdm.tqdm = lambda *a, **k: _ProgressTqdm(log, **k)
+    try:
+        result = mlx_whisper.transcribe(str(mono), path_or_hf_repo=model,
+                                        language=None if language == "auto" else language,
+                                        condition_on_previous_text=False)
+    finally:
+        mwt.tqdm.tqdm = original
     with wave.open(str(mono)) as w:
         audio = np.frombuffer(w.readframes(w.getnframes()), dtype=np.int16).astype(np.float32) / 32768
 

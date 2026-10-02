@@ -31,8 +31,13 @@ struct DJI2NoteApp: App {
             MenuPanel()
                 .environmentObject(model)
         } label: {
-            Image(systemName: model.recorder.isRecording ? "record.circle.fill"
-                              : (model.isBusy ? "waveform.circle.fill" : "waveform.circle"))
+            // 처리 중이면 메뉴바에 진행률(%)도 표시
+            if model.isBusy, let p = model.progress, !model.recorder.isRecording {
+                Text("\(Image(systemName: "waveform.circle.fill")) \(Int(p * 100))%")
+            } else {
+                Image(systemName: model.recorder.isRecording ? "record.circle.fill"
+                                  : (model.isBusy ? "waveform.circle.fill" : "waveform.circle"))
+            }
         }
         .menuBarExtraStyle(.window)
     }
@@ -97,18 +102,14 @@ struct MenuPanel: View {
             DeviceCard(compact: true)
             if model.setupDone { RecordCard(recorder: model.recorder, compact: true) }
 
-            VStack(alignment: .leading, spacing: 6) {
+            if model.isBusy {
+                ActivityCard(compact: true)
+            } else {
                 Text(model.statusText).font(.callout)
-                if model.isBusy && !model.currentItem.isEmpty {
-                    Text(model.currentItem).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                }
-                if let p = model.progress {
-                    ProgressView(value: p)
-                }
+                    .padding(10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
             }
-            .padding(10)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 8))
 
             if !model.setupDone {
                 Button("설정 시작하기…") { show() }

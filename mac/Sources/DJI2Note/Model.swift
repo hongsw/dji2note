@@ -27,6 +27,7 @@ struct EngineConfig: Codable, Equatable {
     var notion_enabled: Bool?
     var notion_token: String?
     var notion_parent: String?
+    var low_power: Bool?
 
     struct Provider: Codable, Equatable {
         let title: String
@@ -106,6 +107,28 @@ final class AppModel: ObservableObject {
     @Published var isBusy = false
     @Published var statusText = "대기 중"
     @Published var currentItem = ""  // 지금 처리 중인 회의 이름
+
+    /// 처리 단계 (작업 현황 카드에 표시)
+    enum Stage: Int, CaseIterable {
+        case copy, transcribe, ai, summary, upload
+        var title: String { ["복사", "받아쓰기", "AI 정리", "요약", "올리기"][rawValue] }
+        var icon: String { ["arrow.down.doc", "waveform", "sparkles", "text.badge.checkmark", "icloud.and.arrow.up"][rawValue] }
+    }
+    @Published var stage: Stage?
+    @Published var stageStartedAt: Date?
+    @Published var runStartedAt: Date?
+    @Published var meetingIndex = 0
+    @Published var meetingTotal = 0
+
+    /// 엔진(및 하위 Whisper·AI 프로세스)의 자원 사용량
+    struct Usage: Equatable {
+        var cpu: Double = 0      // % (100 = 코어 1개)
+        var memoryMB: Int = 0
+        var aiProcesses = 0
+    }
+    @Published var usage: Usage?
+    private var enginePID: pid_t?
+    private var usageTimer: Timer?
     @Published var progress: Double?
     @Published var logLines: [String] = []
 
@@ -154,6 +177,10 @@ final class AppModel: ObservableObject {
         // 녹음 상태가 바뀌면 메뉴바 아이콘 등 AppModel을 보는 화면도 갱신
         recorderSink = recorder.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         startMemosWatcher()
+        // 터미널·단축어 등 다른 곳에서 시작한 처리에도 자동으로 붙기
+        attachTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.attachIfEngineRunning() }
+        }
         Task { await refresh() }
     }
 
@@ -236,6 +263,7 @@ final class AppModel: ObservableObject {
     // MARK: 앱이 다시 켜졌을 때, 이미 돌고 있는 엔진에 다시 연결
 
     private var tailTimer: Timer?
+    private var attachTimer: Timer?
     private var tailOffset: UInt64 = 0
     private var ownRun = false
 
@@ -248,6 +276,8 @@ final class AppModel: ObservableObject {
               let pidNum = obj["pid"] as? Int, kill(pid_t(pidNum), 0) == 0 else { return }
         let pid = pid_t(pidNum)
         isBusy = true
+        beginRunTracking()
+        enginePID = pid
         statusText = "진행 중인 처리에 다시 연결했습니다"
         // 최근 로그로 현재 단계를 복원
         if let text = try? String(contentsOf: Paths.log, encoding: .utf8) {
@@ -272,7 +302,75 @@ final class AppModel: ObservableObject {
             tailTimer = nil
             isBusy = false
             progress = nil
+            endRunTracking()
             Task { await refresh() }
+        }
+    }
+
+    // MARK: 진행 추적·자원 사용량
+
+    private func beginRunTracking() {
+        runStartedAt = Date()
+        stage = nil
+        meetingIndex = 0
+        meetingTotal = 0
+        usageTimer?.invalidate()
+        usageTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in await self?.sampleUsage() }
+        }
+    }
+
+    private func endRunTracking() {
+        usageTimer?.invalidate()
+        usageTimer = nil
+        usage = nil
+        enginePID = nil
+        stage = nil
+        runStartedAt = nil
+        currentItem = ""
+    }
+
+    /// ps로 엔진 프로세스 트리(파이썬·ffmpeg·claude/codex)의 CPU·메모리를 합산
+    private func sampleUsage() async {
+        guard let root = enginePID else { return }
+        let r = await Engine.run(URL(filePath: "/bin/ps"), ["-A", "-o", "pid=,ppid=,pcpu=,rss=,comm="])
+        var children: [pid_t: [pid_t]] = [:]
+        var info: [pid_t: (cpu: Double, rss: Int, name: String)] = [:]
+        for line in r.output.split(separator: "\n") {
+            let f = line.split(separator: " ", maxSplits: 4, omittingEmptySubsequences: true)
+            guard f.count >= 5, let pid = pid_t(f[0]), let ppid = pid_t(f[1]) else { continue }
+            children[ppid, default: []].append(pid)
+            info[pid] = (Double(f[2]) ?? 0, Int(f[3]) ?? 0, String(f[4]))
+        }
+        var u = Usage()
+        var stack = [root]
+        while let p = stack.popLast() {
+            if let i = info[p] {
+                u.cpu += i.cpu
+                u.memoryMB += i.rss / 1024
+                let name = (i.name as NSString).lastPathComponent
+                if name == "claude" || name == "codex" || name.hasPrefix("2.") { u.aiProcesses += 1 }
+            }
+            stack += children[p] ?? []
+        }
+        usage = u
+    }
+
+    /// 처리 중지: 엔진과 하위 프로세스를 끝낸다(받아쓰기·AI 조각 캐시로 다음에 이어서 진행)
+    func cancelRun() {
+        guard let root = enginePID else { return }
+        Task {
+            let r = await Engine.run(URL(filePath: "/bin/ps"), ["-A", "-o", "pid=,ppid="])
+            var children: [pid_t: [pid_t]] = [:]
+            for line in r.output.split(separator: "\n") {
+                let f = line.split(separator: " ", omittingEmptySubsequences: true)
+                if f.count == 2, let p = pid_t(f[0]), let pp = pid_t(f[1]) { children[pp, default: []].append(p) }
+            }
+            var all: [pid_t] = []
+            var stack = [root]
+            while let p = stack.popLast() { all.append(p); stack += children[p] ?? [] }
+            for p in all.reversed() { kill(p, SIGTERM) }
+            statusText = "중지하는 중…"
         }
     }
 
@@ -446,18 +544,23 @@ final class AppModel: ObservableObject {
         ownRun = true
         progress = nil
         position = ""
+        beginRunTracking()
         statusText = "\(title) 시작"
         // 몇 시간짜리 일괄 처리 중에 Mac이 잠들지 않도록
         let activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiated, .idleSystemSleepDisabled], reason: "DJI2Note 회의록 처리")
         Task {
             defer { ProcessInfo.processInfo.endActivity(activity); ownRun = false }
-            let r = await Engine.cli(args) { [weak self] line in
+            let r = await Engine.cli(args, onStart: { [weak self] pid in
+                Task { @MainActor in self?.enginePID = pid }
+            }) { [weak self] line in
                 Task { @MainActor in self?.handle(line) }
             }
             isBusy = false
             progress = nil
-            if !r.ok { statusText = "실패 — 로그를 확인하세요" }
+            endRunTracking()
+            if r.status == 143 || r.status == 15 { statusText = "중지했습니다 — 다시 처리하면 이어서 진행합니다" }
+            else if !r.ok { statusText = "실패 — 로그를 확인하세요" }
             else if statusText.hasSuffix("시작") { statusText = "새 녹음 없음" }
             await refresh()
         }
@@ -467,7 +570,26 @@ final class AppModel: ObservableObject {
     /// 일괄 처리 중 현재 위치 "(2/5)"
     private var position = ""
 
+    private func setStage(_ s: Stage) {
+        if stage != s { stage = s; stageStartedAt = Date() }
+    }
+
     private func handle(_ line: String) {
+        if let m = line.firstMatch(of: /받아쓰기 \[(\d+)%\]/), let pct = Double(m.1) {
+            setStage(.transcribe)
+            progress = pct / 100
+            statusText = pct >= 100 ? "AI가 대본 정리 준비 중\(position)…" : "받아쓰는 중\(position) \(Int(pct))%"
+            return
+        }
+        if line.contains("복사 ") && line.contains("[") { setStage(.copy) }
+        if line.contains("처리 시작") { setStage(.transcribe) }
+        if line.contains("AI 정리 [") { setStage(.ai) }
+        if line.contains("요약 작성 중") { setStage(.summary) }
+        if line.contains("저장: ") || line.contains("Notion에 올리는 중") { setStage(.upload) }
+        if let m = line.firstMatch(of: /처리 시작 \[(\d+)\/(\d+)\]/) {
+            meetingIndex = Int(m.1) ?? 0
+            meetingTotal = Int(m.2) ?? 0
+        }
         if let m = line.firstMatch(of: /(\d{1,3})%\|/), let pct = Double(m.1) {
             progress = pct / 100
             statusText = pct >= 100 ? "AI가 화자 분리·요약하는 중\(position)…" : "받아쓰는 중\(position) \(Int(pct))%"

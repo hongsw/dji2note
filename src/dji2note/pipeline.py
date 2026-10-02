@@ -60,6 +60,19 @@ class _SafeStream:
         return getattr(self._s, name)
 
 
+def mark_running():
+    """긴 작업 시작: 앱이 꺼지거나 바뀌어도 계속 돌고, 다시 켜진 앱이 진행 상황에 붙을 수 있게."""
+    import atexit
+    import os
+    import signal
+    signal.signal(signal.SIGHUP, signal.SIG_IGN)
+    signal.signal(signal.SIGPIPE, signal.SIG_IGN)
+    sys.stdout, sys.stderr = _SafeStream(sys.stdout), _SafeStream(sys.stderr)
+    config.CONFIG_DIR.mkdir(parents=True, exist_ok=True)
+    config.RUN_FILE.write_text(json.dumps({"pid": os.getpid(), "started": datetime.now().isoformat()}))
+    atexit.register(lambda: config.RUN_FILE.unlink(missing_ok=True))
+
+
 def notify(cfg: Config, msg: str):
     if cfg.notify:
         safe = msg.replace('"', "'")
@@ -176,7 +189,7 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
         inputs = [copy_local(cfg, r) if copy else r["src"] for r in group]
         with tempfile.TemporaryDirectory() as tmp:
             raw = transcribe.transcribe(inputs, Path(tmp), cfg.whisper_model, cfg.language,
-                                        speakers=speakers_for(Path(group[0]["src"])))
+                                        speakers=speakers_for(Path(group[0]["src"])), progress_log=log)
     if len(re.sub(r"^\[.*?\|", "", raw, flags=re.M).strip()) < MIN_TEXT_CHARS:
         log(f"대화 없음: {folder.name}")
         return {"status": "no_speech"}
@@ -224,18 +237,6 @@ def run(cfg: Config, dry_run: bool = False, include_seen: bool = False, names: l
     except BlockingIOError:
         log("이미 실행 중")
         return
-    if not dry_run:
-        import atexit
-        import json
-        import os
-        import signal
-        # 앱이 끊겨도 계속 돌도록: 파이프가 닫혀 SIGPIPE/SIGHUP이 와도 종료하지 않음
-        signal.signal(signal.SIGHUP, signal.SIG_IGN)
-        signal.signal(signal.SIGPIPE, signal.SIG_IGN)
-        sys.stdout, sys.stderr = _SafeStream(sys.stdout), _SafeStream(sys.stderr)
-        # 실행 중 표시 — 다시 켜진 앱이 이 파일과 로그로 진행 상황을 이어 받는다
-        config.RUN_FILE.write_text(json.dumps({"pid": os.getpid(), "started": datetime.now().isoformat()}))
-        atexit.register(lambda: config.RUN_FILE.unlink(missing_ok=True))
 
     time.sleep(0 if dry_run else 3)  # 마운트 직후 안정화
     state = config.load_state()

@@ -36,13 +36,10 @@ struct HistoryTab: View {
         VStack(alignment: .leading, spacing: 12) {
             DeviceCard()
             RecordCard(recorder: model.recorder)
+            if model.isBusy { ActivityCard() }
             HStack {
-                VStack(alignment: .leading) {
+                if !model.isBusy {  // 처리 중에는 위 작업 현황 카드가 대신 보여 줌
                     Text(model.statusText).font(.headline).lineLimit(1)
-                    if model.isBusy && !model.currentItem.isEmpty {
-                        Text(model.currentItem).font(.caption).foregroundStyle(.secondary).lineLimit(1)
-                    }
-                    if let p = model.progress { ProgressView(value: p).frame(width: 260) }
                 }
                 Spacer()
                 Picker("", selection: $model.connectAction) {

@@ -228,10 +228,11 @@ def make_transcript(cfg: Config, raw: str, log=print, cache_dir: Path | None = N
         else:
             todo.append(i)
     done = len(chunks) - len(todo)
-    log(f"AI 정리 [{done}/{len(chunks)}] ({model or '기본 모델'}, 동시 {cfg.llm_parallel}개)")
+    workers = min(cfg.llm_parallel, 2) if cfg.low_power else cfg.llm_parallel
+    log(f"AI 정리 [{done}/{len(chunks)}] ({model or '기본 모델'}, 동시 {workers}개)")
     if cache_dir:
         cache_dir.mkdir(parents=True, exist_ok=True)
-    with ThreadPoolExecutor(max_workers=max(1, cfg.llm_parallel)) as pool:
+    with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
         futures = {pool.submit(ask, cfg, TRANSCRIPT_PROMPT.format(raw=chunks[i]), model): i for i in todo}
         for f in as_completed(futures):
             i = futures[f]

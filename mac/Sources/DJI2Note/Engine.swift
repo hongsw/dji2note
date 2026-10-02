@@ -69,6 +69,7 @@ enum Engine {
 
     @discardableResult
     static func run(_ exe: URL, _ args: [String], input: String? = nil,
+                    onStart: (@Sendable (Int32) -> Void)? = nil,
                     onLine: (@Sendable (String) -> Void)? = nil) async -> CommandResult {
         await withCheckedContinuation { cont in
             let p = Process()
@@ -94,6 +95,7 @@ enum Engine {
             }
             do {
                 try p.run()
+                onStart?(p.processIdentifier)
                 if let input { stdin.fileHandleForWriting.write(Data(input.utf8)) }
                 try? stdin.fileHandleForWriting.close()
             } catch {
@@ -103,9 +105,10 @@ enum Engine {
     }
 
     @discardableResult
-    static func cli(_ args: [String], onLine: (@Sendable (String) -> Void)? = nil) async -> CommandResult {
+    static func cli(_ args: [String], onStart: (@Sendable (Int32) -> Void)? = nil,
+                    onLine: (@Sendable (String) -> Void)? = nil) async -> CommandResult {
         guard isInstalled else { return CommandResult(status: -1, output: "엔진이 설치되지 않았습니다") }
-        return await run(Paths.cli, args, onLine: onLine)
+        return await run(Paths.cli, args, onStart: onStart, onLine: onLine)
     }
 
     static func json<T: Decodable>(_ args: [String], as type: T.Type) async -> T? {

@@ -20,6 +20,9 @@ struct GeneralSection: View {
             Picker("대화 언어", selection: binding(\.language, key: "language")) {
                 ForEach(languages, id: \.0) { Text($0.1).tag($0.0) }
             }
+            Toggle("저전력 모드 — 처리 중에도 다른 작업이 덜 느려지게(대신 처리는 느려짐)", isOn: Binding(
+                get: { model.config.low_power ?? false },
+                set: { v in Task { await model.set(["low_power": v ? "true" : "false"]) } }))
             Toggle("처리가 끝나면 알림", isOn: Binding(
                 get: { model.config.notify },
                 set: { v in Task { await model.set(["notify": v ? "true" : "false"]) } }))
