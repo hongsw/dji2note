@@ -795,7 +795,7 @@ final class AppModel: ObservableObject {
     /// 메인 창 열기 (Window 장면이 `dji2note://show`를 받아 열린다)
     func showMainWindow() {
         NSApp.activate(ignoringOtherApps: true)
-        NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+        LaunchSupport.showMainWindow()
         // 창이 연결이 끊긴 모니터 등 화면 밖에 있으면 주 화면 가운데로
         Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))

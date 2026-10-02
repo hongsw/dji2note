@@ -59,18 +59,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
             if self.openedByUser {
                 // 응용 프로그램·Launchpad·Spotlight에서 직접 열면 창을 바로 보여 줌
-                NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+                LaunchSupport.showMainWindow()
             } else if self.loginLaunch {
                 // 로그인 시 자동 실행은 메뉴바에만 조용히
                 NSApp.windows.filter { $0.styleMask.contains(.titled) }.forEach { $0.close() }
             }
             LaunchSupport.updateDockIcon()
+            // 개발용: --args -debugCloseAndQuit YES → 창 닫고 종료(창 없이 종료된 상태 재현)
+            if UserDefaults.standard.bool(forKey: "debugCloseAndQuit") {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 2) {
+                    NSApp.windows.filter { $0.styleMask.contains(.titled) }.forEach { $0.close() }
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { NSApp.terminate(nil) }
+                }
+            }
         }
     }
 
     /// 이미 실행 중일 때 아이콘을 다시 누르면 창을 연다
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+        LaunchSupport.showMainWindow()
         return false
     }
 

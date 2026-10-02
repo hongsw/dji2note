@@ -2,17 +2,46 @@ import AppKit
 
 /// 직접 실행(아이콘 클릭)과 자동 실행(로그인·DJI 연결)을 구분하고, 응용 프로그램의 Baryon 폴더를 꾸민다.
 enum LaunchSupport {
+
     /// 로그인 항목으로 자동 실행됐는지 (그때는 창을 띄우지 않고 메뉴바에만)
     static func launchedAsLoginItem() -> Bool {
-        guard let event = NSAppleEventManager.shared().currentAppleEvent,
-              event.eventID == AEEventID(kAEOpenApplication) else { return false }
-        return event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem)
+        if let event = NSAppleEventManager.shared().currentAppleEvent, event.eventID == AEEventID(kAEOpenApplication),
+           event.paramDescriptor(forKeyword: AEKeyword(keyAEPropData))?.enumCodeValue == OSType(keyAELaunchedAsLogInItem) {
+            return true
+        }
+        // 실행 이벤트 정보가 비어 오는 경우가 있어: Mac이 켜진 지 3분 안의 실행은 로그인 자동 실행으로 본다
+        return ProcessInfo.processInfo.systemUptime < 180
     }
 
     /// 사용자가 Finder·Launchpad·Spotlight에서 직접 연 경우 (URL로 깨어난 경우 제외)
     static func launchedByUser() -> Bool {
+        if launchedAsLoginItem() { return false }
         guard let event = NSAppleEventManager.shared().currentAppleEvent else { return true }
-        return event.eventID == AEEventID(kAEOpenApplication) && !launchedAsLoginItem()
+        return event.eventID == AEEventID(kAEOpenApplication)
+    }
+
+    /// 메인 창을 확실히 띄운다. 실행 직후엔 SwiftUI가 URL을 놓칠 수 있어 보일 때까지 최대 3번 다시 요청
+    static func showMainWindow(attempt: Int = 0) {
+        if let win = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" && $0.isVisible }) {
+            // 모니터 연결이 바뀌었거나 저장된 위치가 화면 밖이면 마우스가 있는 화면 가운데로
+            let onScreen = NSScreen.screens.contains { $0.visibleFrame.intersection(win.frame).width > 100 }
+            if !onScreen, let screen = NSScreen.screens.first(where: { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) ?? NSScreen.main {
+                let f = screen.visibleFrame
+                win.setFrameOrigin(NSPoint(x: f.midX - win.frame.width / 2, y: f.midY - win.frame.height / 2))
+            }
+            NSApp.activate(ignoringOtherApps: true)
+            win.makeKeyAndOrderFront(nil)
+            return
+        }
+        // 닫혀 있지만 창 객체가 남아 있으면 바로 앞으로
+        if let win = NSApp.windows.first(where: { $0.identifier?.rawValue == "main" }) {
+            win.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        } else if attempt < 6 {
+            NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+        }
+        guard attempt < 6 else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { showMainWindow(attempt: attempt + 1) }
     }
 
     /// 창이 열려 있으면 Dock에 보이고, 다 닫히면 메뉴바 전용으로
