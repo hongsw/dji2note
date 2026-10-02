@@ -279,9 +279,12 @@ final class AppModel: ObservableObject {
         beginRunTracking()
         enginePID = pid
         statusText = "진행 중인 처리에 다시 연결했습니다"
-        // 최근 로그로 현재 단계를 복원
+        // 이번 작업이 시작된 뒤의 로그로만 현재 단계를 복원 (이전 작업 로그는 무시)
+        let started = (obj["started"] as? String).map { String($0.prefix(19)).replacingOccurrences(of: "T", with: " ") } ?? ""
         if let text = try? String(contentsOf: Paths.log, encoding: .utf8) {
-            for line in text.split(separator: "\n").suffix(40) { handle(String(line)) }
+            for line in text.split(separator: "\n").suffix(400) where String(line.prefix(19)) >= started {
+                handle(String(line))
+            }
         }
         tailOffset = (try? FileManager.default.attributesOfItem(atPath: Paths.log.path)[.size] as? UInt64) ?? 0
         tailTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
@@ -303,7 +306,13 @@ final class AppModel: ObservableObject {
             isBusy = false
             progress = nil
             endRunTracking()
-            Task { await refresh() }
+            Task {
+                await refresh()
+                if !queue.isEmpty {
+                    let next = queue.removeFirst()
+                    runPipeline(next.args, title: next.title)
+                }
+            }
         }
     }
 
@@ -538,8 +547,15 @@ final class AppModel: ObservableObject {
         await refresh()
     }
 
+    /// 처리 중에 들어온 요청(예: 처리 중에 끝낸 녹음)은 대기열에 넣었다가 차례로
+    @Published var queue: [(args: [String], title: String)] = []
+
     func runPipeline(_ args: [String], title: String) {
-        guard !isBusy, engineInstalled else { return }
+        guard engineInstalled else { return }
+        if isBusy {
+            queue.append((args, title))
+            return
+        }
         isBusy = true
         ownRun = true
         progress = nil
@@ -563,6 +579,10 @@ final class AppModel: ObservableObject {
             else if !r.ok { statusText = "실패 — 로그를 확인하세요" }
             else if statusText.hasSuffix("시작") { statusText = "새 녹음 없음" }
             await refresh()
+            if !queue.isEmpty {
+                let next = queue.removeFirst()
+                runPipeline(next.args, title: next.title)
+            }
         }
     }
 

@@ -299,7 +299,7 @@ nvtx = [
 
 [[package]]
 name = "dji2note"
-version = "0.1.8"
+version = "0.1.9"
 source = { editable = "." }
 dependencies = [
     { name = "anthropic" },

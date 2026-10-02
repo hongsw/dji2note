@@ -32,7 +32,6 @@ struct RecordCard: View {
                     Label("녹음 시작", systemImage: "record.circle")
                 }
                 .buttonStyle(.borderedProminent).tint(.red)
-                .disabled(model.isBusy && !compact)
             }
             HStack {
                 Text(recorder.mode == .meeting ? "내 마이크" : "마이크").font(.caption).foregroundStyle(.secondary)

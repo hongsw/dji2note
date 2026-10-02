@@ -13,6 +13,11 @@ struct ActivityCard: View {
                 if !compact { steps }
                 progressRow
                 usageRow
+                if !model.queue.isEmpty {
+                    Label("다음 차례 \(model.queue.count)건: " + model.queue.map(\.title).joined(separator: ", "),
+                          systemImage: "list.bullet.rectangle")
+                        .font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                }
             }
         }
         .padding(compact ? 10 : 14)
