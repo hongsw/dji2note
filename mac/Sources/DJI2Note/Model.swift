@@ -213,6 +213,11 @@ final class AppModel: ObservableObject {
     init() {
         startMountWatcher()
         registerMountAgent()
+        // 앱 위치가 바뀌면(예: 응용 프로그램/Baryon 으로 이동) 로그인 항목을 새 위치로 다시 등록
+        if setupDone, UserDefaults.standard.object(forKey: "loginItemWanted") as? Bool ?? true,
+           SMAppService.mainApp.status != .enabled {
+            try? SMAppService.mainApp.register()
+        }
         recorder.onFinished = { [weak self] files, mode in self?.processRecording(files, mode: mode) }
         // 녹음 상태가 바뀌면 메뉴바 아이콘 등 AppModel을 보는 화면도 갱신
         recorderSink = recorder.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
@@ -825,6 +830,7 @@ final class AppModel: ObservableObject {
     var launchAtLogin: Bool {
         get { SMAppService.mainApp.status == .enabled }
         set {
+            UserDefaults.standard.set(newValue, forKey: "loginItemWanted")
             do {
                 if newValue { try SMAppService.mainApp.register() } else { try SMAppService.mainApp.unregister() }
             } catch {

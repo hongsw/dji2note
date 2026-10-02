@@ -41,9 +41,11 @@ DJI Mic 연결 → 새 녹음 복사 → Whisper 받아쓰기 → 화자 분리(
 curl -fsSL https://raw.githubusercontent.com/hongsw/dji2note/main/install-app.sh | bash
 ```
 
-**방법 B — DMG**: [최신 릴리스](https://github.com/hongsw/dji2note/releases/latest)에서 `DJI2Note.dmg`를 받아 앱을 `응용 프로그램`으로 끌어 옵니다.
+**방법 B — DMG**: [최신 릴리스](https://github.com/hongsw/dji2note/releases/latest)에서 `DJI2Note.dmg`를 받아 앱을 `응용 프로그램`(또는 그 안의 `Baryon` 폴더)으로 끌어 옵니다.
 > 아직 Apple 공증을 받지 않은 앱이라 처음 열 때 "확인할 수 없음" 경고가 뜹니다.
 > **시스템 설정 → 개인정보 보호 및 보안 → 맨 아래 "그래도 열기"**를 누르면 됩니다(한 번만).
+
+앱은 **응용 프로그램 → Baryon** 폴더에 설치됩니다(Baryon 앱 모음, 폴더 아이콘 자동 적용). 아이콘을 누르면 창이 열리고, 창이 열려 있는 동안 Dock에도 보입니다. 로그인 시 자동 실행이나 DJI 연결로 깨어날 때는 메뉴바에만 조용히 있습니다.
 
 앱을 열면 설정 마법사가 이어집니다: **엔진 설치 → 요약 AI(Claude 로그인 / API 키) → Google 계정 연결 → 마무리**.
 관리자 암호나 Homebrew는 필요 없고, 모든 파일은 `~/Library/Application Support/DJI2Note`에 설치됩니다.

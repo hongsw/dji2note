@@ -45,6 +45,34 @@ struct DJI2NoteApp: App {
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private let launchedAt = Date()
+    private var openedByUser = false
+    private var loginLaunch = false
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        LaunchSupport.decorateBaryonFolder()
+        // 창이 열리고 닫힐 때 Dock 아이콘 표시 전환
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.willCloseNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { LaunchSupport.updateDockIcon() }
+            }
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            if self.openedByUser {
+                // 응용 프로그램·Launchpad·Spotlight에서 직접 열면 창을 바로 보여 줌
+                NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+            } else if self.loginLaunch {
+                // 로그인 시 자동 실행은 메뉴바에만 조용히
+                NSApp.windows.filter { $0.styleMask.contains(.titled) }.forEach { $0.close() }
+            }
+            LaunchSupport.updateDockIcon()
+        }
+    }
+
+    /// 이미 실행 중일 때 아이콘을 다시 누르면 창을 연다
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        NSWorkspace.shared.open(URL(string: "dji2note://show")!)
+        return false
+    }
 
     /// dji2note://mounted — 볼륨 마운트 때 launchd 에이전트가 보냄
     func application(_ application: NSApplication, open urls: [URL]) {
@@ -75,6 +103,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
+        openedByUser = LaunchSupport.launchedByUser()
+        loginLaunch = LaunchSupport.launchedAsLoginItem()
         // 화면 없이 엔진만 설치: DJI2Note.app/Contents/MacOS/DJI2Note --install-engine [--with-model]
         let args = CommandLine.arguments
         guard args.contains("--install-engine") else { return }
