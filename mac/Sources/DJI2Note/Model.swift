@@ -634,6 +634,11 @@ final class AppModel: ObservableObject {
         zoomDownloadsEnabled = true
     }
 
+    /// 다운로드 폴더의 기존 Zoom 녹화 파일까지 모두 정리 (켤 때 건너뛴 것 포함)
+    func processAllZoomDownloads() {
+        runPipeline(["zoom-downloads", "--all"], title: "Zoom 다운로드 정리")
+    }
+
     private func downloadsZoomSignature() -> String {
         let dir = Paths.home.appending(path: "Downloads")
         let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []

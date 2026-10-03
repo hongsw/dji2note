@@ -214,6 +214,8 @@ struct SourcesTab: View {
             }
             Text("GMT20261003-053000_Recording.m4a 같은 Zoom 다운로드 파일을 회의별로 묶고, 채팅 파일도 함께 반영합니다. 켤 때 이미 있던 파일은 건너뜁니다.")
                 .font(.caption).foregroundStyle(.secondary)
+            Button("다운로드 폴더의 기존 Zoom 녹화도 모두 정리") { model.processAllZoomDownloads() }
+                .disabled(model.isBusy)
         }
     }
 

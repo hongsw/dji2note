@@ -91,7 +91,7 @@ def find_cloud_downloads(root: Path = DOWNLOADS_DIR) -> list[dict]:
     groups: dict[str, list[Path]] = {}
     for p in root.iterdir():
         m = CLOUD_RE.match(p.name)
-        if m and p.is_file():
+        if m and p.is_file() and not re.search(r" \(\d+\)\.\w+$", p.name):  # '… (1).mp4' 중복 사본은 무시
             groups.setdefault(f"{m.group(1)}-{m.group(2)}", []).append(p)
     out = []
     now = time.time()

@@ -98,6 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             Task { @MainActor in await AppModel.shared.recorder.stop() }
             return
         }
+        if urls.contains(where: { $0.host == "zoom-downloads-all" }) {
+            Task { @MainActor in AppModel.shared.processAllZoomDownloads() }
+            return
+        }
         if urls.contains(where: { $0.host == "process-all" }) {
             Task { @MainActor in AppModel.shared.processAll() }  // 자동화·스크립트용
             return
