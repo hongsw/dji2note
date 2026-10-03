@@ -63,6 +63,8 @@ struct HistoryRow: View {
     @State private var copied: NoteDoc?
 
     var body: some View {
+        HStack(alignment: .top, spacing: 10) {
+        SourceTile(source: source, label: sourceLabel, compact: compact)
         VStack(alignment: .leading, spacing: 6) {
             HStack(alignment: .firstTextBaseline) {
                 VStack(alignment: .leading, spacing: 2) {
@@ -91,6 +93,7 @@ struct HistoryRow: View {
                     }
                 }
             }
+        }
         }
         .buttonStyle(.borderless)
         .padding(.vertical, 2)
@@ -145,6 +148,14 @@ struct HistoryRow: View {
         item.entry.notes.map { URL(filePath: $0).lastPathComponent } ?? item.name
     }
 
+    private var source: NoteSource { NoteSource.of(files: item.meta?.files ?? [], folder: folderName) }
+
+    /// 앱 녹음 중 온라인 회의는 '온라인'으로 구분
+    private var sourceLabel: String? {
+        if source == .app, folderName.hasSuffix("_온라인회의") || (item.meta?.files?.first ?? "").hasPrefix("MEET_") { return "온라인" }
+        return nil
+    }
+
     private var topic: String? {
         if let t = item.meta?.topic, !t.isEmpty { return t }
         return item.entry.notes.flatMap(Notes.topic(folder:))
@@ -157,8 +168,7 @@ struct HistoryRow: View {
         if parts.count >= 2, parts[1].count == 4 {
             when = "\(parts[0].dropFirst(5).replacingOccurrences(of: "-", with: "/")) \(parts[1].prefix(2)):\(parts[1].suffix(2))"
         }
-        let source = NoteSource.of(files: item.meta?.files ?? [], folder: folderName)
-        var t = Text("\(Image(systemName: source.icon)) ") + Text(when)
+        var t = Text(when)
         if let d = item.meta?.duration_text, (item.meta?.duration ?? 0) > 0 {
             t = t + Text("  \(Image(systemName: "clock")) \(d)")
         }

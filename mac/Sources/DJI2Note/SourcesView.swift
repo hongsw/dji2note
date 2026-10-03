@@ -19,6 +19,41 @@ enum NoteSource: String, CaseIterable {
     }
 }
 
+extension NoteSource {
+    /// 목록 타일에 쓰는 짧은 이름과 색
+    var shortName: String { ["DJI", "녹음", "Zoom", "메모", "파일"][Self.allCases.firstIndex(of: self)!] }
+    var color: Color {
+        switch self {
+        case .dji: Color(red: 0.12, green: 0.12, blue: 0.14)
+        case .zoom: Color(red: 0.04, green: 0.36, blue: 1.0)      // Zoom 파랑
+        case .app: Color(red: 0.90, green: 0.22, blue: 0.21)
+        case .memo: Color(red: 0.98, green: 0.45, blue: 0.09)
+        case .file: Color.gray
+        }
+    }
+}
+
+/// 회의록 목록 왼쪽의 출처 타일 (아이콘 + 짧은 이름)
+struct SourceTile: View {
+    let source: NoteSource
+    var label: String? = nil
+    var compact = false
+
+    var body: some View {
+        VStack(spacing: 2) {
+            Image(systemName: source.icon)
+                .font(.system(size: compact ? 11 : 15, weight: .semibold))
+            if !compact {
+                Text(label ?? source.shortName).font(.system(size: 9, weight: .bold)).lineLimit(1)
+            }
+        }
+        .foregroundStyle(.white)
+        .frame(width: compact ? 24 : 40, height: compact ? 24 : 40)
+        .background(source.color.gradient, in: RoundedRectangle(cornerRadius: compact ? 6 : 9))
+        .help(source.title)
+    }
+}
+
 /// 상태 배지: 켜짐 / 연결됨 / 권한 필요 / 꺼짐
 struct SourceBadge: View {
     enum Kind { case on, connected, needsPermission, off, info(String) }
