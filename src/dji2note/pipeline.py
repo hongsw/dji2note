@@ -481,6 +481,56 @@ def run_zoom(cfg: Config, dry_run: bool = False, skip_existing: bool = False, in
     return 0
 
 
+def run_zoom_cloud(cfg: Config, dry_run: bool = False, skip_existing: bool = False,
+                   include_seen: bool = False, days: int | None = None):
+    """Zoom 클라우드의 새 녹화를 내려받아 처리한다(앱이 15분마다 호출)."""
+    from . import zoom, zoom_cloud
+    state = config.load_state()
+    try:
+        meetings = zoom_cloud.list_meetings(cfg, days or cfg.zoom_cloud_days)
+    except zoom_cloud.ZoomError as e:
+        log(f"실패: {e}")
+        return 2
+    new = [m for m in meetings if zoom_cloud.is_ready(m)
+           and (("zoomcloud:" + m["uuid"]) not in state
+                or (include_seen and state["zoomcloud:" + m["uuid"]].get("status") == "seen"))]
+    now = datetime.now().isoformat(timespec="seconds")
+    if skip_existing:
+        for m in new:
+            state["zoomcloud:" + m["uuid"]] = {"status": "seen", "at": now}
+        config.save_state(state)
+        log(f"기존 Zoom 클라우드 녹화 {len(new)}개는 건너뜁니다")
+        return 0
+    if dry_run:
+        for m in new:
+            p = zoom_cloud.pick_files(m)
+            how = f"참가자 {len(p['people'])}명 따로" if p["people"] else ("오디오" if p["audio"] else "영상")
+            print(f"  {m['start_time'][:16].replace('T', ' ')}  {m.get('topic', '')}  — {how}")
+        return 0
+    lock = open(config.LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("이미 실행 중")
+        return 0
+    work = cfg.recordings_dir / "zoom-cloud"
+    for i, m in enumerate(new, 1):
+        key = "zoomcloud:" + m["uuid"]
+        try:
+            log(f"Zoom 녹화 준비 [{i}/{len(new)}]: {m.get('topic', '')} (클라우드)")
+            info = zoom_cloud.fetch(cfg, m, work, log)
+            audio = zoom.prepare_audio(info, cfg.recordings_dir)
+            rec = recording_info(audio) | {"duration": duration(audio)}
+            res = process_session(cfg, [rec], copy=False, index=(i, len(new)))
+            state[key] = {**res, "at": datetime.now().isoformat(timespec="seconds")}
+            shutil.rmtree(info["folder"], ignore_errors=True)  # 원본 내려받은 것은 정리(합친 오디오는 남김)
+        except Exception as e:
+            log(f"실패: {m.get('topic', m['uuid'])}: {e}")
+        config.save_state(state)
+    log(f"전체 완료: Zoom 클라우드 녹화 {len(new)}개 확인")
+    return 0
+
+
 def mark_seen(names: list[str]):
     state = config.load_state()
     now = datetime.now().isoformat(timespec="seconds")

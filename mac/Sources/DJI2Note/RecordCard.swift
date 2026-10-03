@@ -219,3 +219,82 @@ struct ZoomSection: View {
         }
     }
 }
+
+/// 일반 설정: Zoom 클라우드 녹화 (Server-to-Server OAuth 앱)
+struct ZoomCloudSection: View {
+    @EnvironmentObject var model: AppModel
+    @State private var accountID = ""
+    @State private var clientID = ""
+    @State private var secret = ""
+    @State private var testing = false
+
+    var body: some View {
+        Section {
+            Toggle("새 클라우드 녹화를 15분마다 확인해 자동 정리", isOn: Binding(
+                get: { model.zoomCloudEnabled },
+                set: { v in
+                    if v { Task { await model.enableZoomCloud() } } else { model.zoomCloudEnabled = false }
+                }))
+                .disabled(model.zoomCloudStatus?.ok != true && !model.zoomCloudEnabled)
+
+            VStack(alignment: .leading, spacing: 4) {
+                Text("처음 한 번만 (Zoom 계정 관리자)").font(.callout.weight(.semibold))
+                Text("① [Zoom App Marketplace](https://marketplace.zoom.us/develop/create) → Server-to-Server OAuth 앱 만들기")
+                Text("② Scopes에 클라우드 녹화 읽기 추가: cloud_recording:read:list_user_recordings:admin, cloud_recording:read:recording:admin")
+                Text("③ Activate 한 뒤 App Credentials의 Account ID · Client ID · Client Secret 을 아래에 붙여 넣기")
+            }
+            .font(.caption).foregroundStyle(.secondary)
+
+            LabeledContent("Account ID") {
+                TextField("Account ID", text: $accountID, prompt: Text("예: AbCdEf123…")).textFieldStyle(.roundedBorder).labelsHidden()
+            }
+            LabeledContent("Client ID") {
+                TextField("Client ID", text: $clientID, prompt: Text("Client ID")).textFieldStyle(.roundedBorder).labelsHidden()
+            }
+            LabeledContent("Client Secret") {
+                SecureField("Client Secret", text: $secret,
+                            prompt: Text((model.config.zoom_client_secret ?? "").isEmpty ? "Client Secret" : "저장됨 (바꾸려면 입력)"))
+                    .textFieldStyle(.roundedBorder).labelsHidden()
+            }
+            HStack {
+                Button(testing ? "확인 중…" : "저장하고 연결 테스트") { save() }
+                    .disabled(testing || accountID.isEmpty || clientID.isEmpty)
+                if let s = model.zoomCloudStatus {
+                    if s.ok {
+                        Label("연결됨 · 최근 30일 녹화 \(s.count ?? 0)개" + ((s.per_person ?? 0) > 0 ? " (참가자별 오디오 \(s.per_person ?? 0))" : ""),
+                              systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.callout)
+                    } else if let e = s.error {
+                        Text("❌ \(e)").font(.callout).foregroundStyle(.red).lineLimit(3)
+                    }
+                }
+            }
+            if model.zoomCloudEnabled {
+                Button("최근 30일 클라우드 녹화도 모두 정리") { model.processAllZoomCloud() }
+                    .disabled(model.isBusy)
+            }
+        } header: {
+            Text("Zoom 클라우드 녹화")
+        } footer: {
+            Text("Zoom 계정의 클라우드 녹화를 내려받아 정리합니다. 클라우드 설정에서 '참가자별 오디오 녹음'을 켜면 화자를 실제 이름으로 나눕니다. 내려받은 원본은 정리 후 지웁니다.")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .onAppear {
+            accountID = model.config.zoom_account_id ?? ""
+            clientID = model.config.zoom_client_id ?? ""
+        }
+        .task { if !(model.config.zoom_account_id ?? "").isEmpty { await model.checkZoomCloud() } }
+    }
+
+    private func save() {
+        testing = true
+        var pairs = ["zoom_account_id": accountID.trimmingCharacters(in: .whitespaces),
+                     "zoom_client_id": clientID.trimmingCharacters(in: .whitespaces)]
+        if !secret.isEmpty { pairs["zoom_client_secret"] = secret.trimmingCharacters(in: .whitespaces) }
+        Task {
+            await model.set(pairs)
+            secret = ""
+            await model.checkZoomCloud()
+            testing = false
+        }
+    }
+}

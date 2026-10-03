@@ -30,6 +30,10 @@ struct EngineConfig: Codable, Equatable {
     var low_power: Bool?
     var default_situation: String?
     var zoom_dir: String?
+    var zoom_account_id: String?
+    var zoom_client_id: String?
+    var zoom_client_secret: String?
+    var zoom_user: String?
 
     struct Provider: Codable, Equatable {
         let title: String
@@ -224,6 +228,7 @@ final class AppModel: ObservableObject {
         recorderSink = recorder.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         startMemosWatcher()
         startZoomWatcher()
+        startZoomCloudWatcher()
         // 터미널·단축어 등 다른 곳에서 시작한 처리에도 자동으로 붙기
         attachTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.attachIfEngineRunning() }
@@ -649,6 +654,48 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Zoom 클라우드 녹화
+
+    struct ZoomCloudCheck: Decodable {
+        let ok: Bool
+        let count: Int?
+        let per_person: Int?
+        let latest: String?
+        let error: String?
+    }
+
+    @Published var zoomCloudEnabled = UserDefaults.standard.bool(forKey: "zoomCloudEnabled") {
+        didSet { UserDefaults.standard.set(zoomCloudEnabled, forKey: "zoomCloudEnabled") }
+    }
+    @Published var zoomCloudStatus: ZoomCloudCheck?
+    private var zoomCloudTimer: Timer?
+
+    func checkZoomCloud() async {
+        zoomCloudStatus = await Engine.json(["zoom-cloud", "--check"], as: ZoomCloudCheck.self)
+    }
+
+    /// 켤 때: 지금 클라우드에 있는 녹화는 건너뛰고 앞으로 생기는 것만 (기존 것도 원하면 processAllZoomCloud)
+    func enableZoomCloud() async {
+        await checkZoomCloud()
+        guard zoomCloudStatus?.ok == true else { return }
+        await Engine.cli(["zoom-cloud", "--skip-existing"])
+        zoomCloudEnabled = true
+    }
+
+    func processAllZoomCloud() {
+        runPipeline(["zoom-cloud", "--all"], title: "Zoom 클라우드 녹화 처리")
+    }
+
+    /// 15분마다 새 클라우드 녹화 확인 (Zoom은 회의가 끝나고 클라우드 처리에 몇 분~수십 분 걸림)
+    private func startZoomCloudWatcher() {
+        zoomCloudTimer = Timer.scheduledTimer(withTimeInterval: 15 * 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.zoomCloudEnabled, self.setupDone, !self.isBusy, !self.recorder.isRecording else { return }
+                self.runPipeline(["zoom-cloud"], title: "새 Zoom 클라우드 녹화 처리")
+            }
+        }
+    }
+
     struct NotionTest: Decodable {
         let ok: Bool
         let type: String?
@@ -793,6 +840,9 @@ final class AppModel: ObservableObject {
             setStage(.copy)
             statusText = "Zoom 녹화 준비 중"
             currentItem = String(line[r.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " :[]0123456789/"))
+        } else if line.contains("내려받는 중") {
+            setStage(.copy)
+            statusText = "Zoom 클라우드에서 내려받는 중"
         } else if line.contains("Notion에 올리는 중") {
             statusText = "Notion에 올리는 중\(position)"
         } else if let m = line.firstMatch(of: /올림 \[(\d+)\/(\d+)\]/) {
