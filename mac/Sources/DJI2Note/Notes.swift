@@ -157,7 +157,8 @@ struct HistoryRow: View {
         if parts.count >= 2, parts[1].count == 4 {
             when = "\(parts[0].dropFirst(5).replacingOccurrences(of: "-", with: "/")) \(parts[1].prefix(2)):\(parts[1].suffix(2))"
         }
-        var t = Text(when)
+        let source = NoteSource.of(files: item.meta?.files ?? [], folder: folderName)
+        var t = Text("\(Image(systemName: source.icon)) ") + Text(when)
         if let d = item.meta?.duration_text, (item.meta?.duration ?? 0) > 0 {
             t = t + Text("  \(Image(systemName: "clock")) \(d)")
         }

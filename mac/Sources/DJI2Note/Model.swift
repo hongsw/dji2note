@@ -98,6 +98,7 @@ struct NoteMeta: Codable {
     let drive_url: String?
     let notion_url: String?
     let at: String?
+    let files: [String]?
 }
 
 /// 녹음 상황 (엔진 `situations` 목록)
