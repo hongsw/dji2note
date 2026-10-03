@@ -7,7 +7,13 @@ VERSION="${1:-$(grep -m1 '^version' ../pyproject.toml | cut -d'"' -f2)}"
 BUILD="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
 OUT=build
 APP="$OUT/DJI2Note.app"
-SIGN_ID="${SIGN_ID:--}"   # 기본은 ad-hoc 서명. Developer ID가 있으면 SIGN_ID로 지정
+# 서명: 고정된 인증서로 서명해야 업데이트해도 macOS 권한(마이크·문서·이동식 볼륨)이 유지된다.
+# SIGN_ID가 없으면 키체인의 Developer ID → Apple Development 순으로 찾고, 없으면 ad-hoc(매번 권한 다시 물음)
+if [ -z "${SIGN_ID:-}" ]; then
+  SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 "Developer ID Application" | sed -E 's/.*"(.*)"/\1/' || true)
+  [ -n "$SIGN_ID" ] || SIGN_ID=$(security find-identity -v -p codesigning 2>/dev/null | grep -m1 "Apple Development" | sed -E 's/.*"(.*)"/\1/' || true)
+  [ -n "$SIGN_ID" ] || SIGN_ID="-"
+fi
 
 rm -rf "$OUT" && mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 
