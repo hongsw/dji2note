@@ -20,7 +20,8 @@ struct SettingsView: View {
             DiagnosticsTab().tabItem { Label("점검", systemImage: "stethoscope") }.tag("doctor")
         }
         .padding()
-        .frame(width: 680, height: 540)
+        // 크기 조절·전체 화면 가능 (최소 크기만 지정)
+        .frame(minWidth: 680, idealWidth: 820, maxWidth: .infinity, minHeight: 540, idealHeight: 760, maxHeight: .infinity)
         .task {
             await model.refresh()
             // 개발용: --args -debugOpenNote <회의록 폴더>

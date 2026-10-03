@@ -18,7 +18,8 @@ struct DJI2NoteApp: App {
             .environmentObject(model)
             .onAppear { NSApp.activate(ignoringOtherApps: true) }
         }
-        .windowResizability(.contentSize)
+        .windowResizability(.contentMinSize)   // 최소 크기 이상으로 자유롭게, 초록 버튼으로 전체 화면
+        .defaultSize(width: 820, height: 760)
         .handlesExternalEvents(matching: ["show"])
 
         WindowGroup("회의록", id: "viewer", for: NoteRef.self) { $ref in

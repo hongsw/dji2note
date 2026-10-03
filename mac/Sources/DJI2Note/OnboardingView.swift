@@ -27,7 +27,7 @@ struct OnboardingView: View {
             Divider()
             footer
         }
-        .frame(width: 640, height: 560)
+        .frame(minWidth: 640, idealWidth: 680, maxWidth: .infinity, minHeight: 560, idealHeight: 600, maxHeight: .infinity)
     }
 
     private var header: some View {
