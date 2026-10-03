@@ -621,6 +621,24 @@ final class AppModel: ObservableObject {
         zoomEnabled = true
     }
 
+    // 웹에서 내려받은 Zoom 클라우드 녹화(GMT…_Recording.*) — 관리자 권한 없는 기관 계정용
+    @Published var zoomDownloadsEnabled = UserDefaults.standard.bool(forKey: "zoomDownloadsEnabled") {
+        didSet { UserDefaults.standard.set(zoomDownloadsEnabled, forKey: "zoomDownloadsEnabled") }
+    }
+    private var downloadsSignature = ""
+
+    func enableZoomDownloads() async {
+        await Engine.cli(["zoom-downloads", "--skip-existing"])
+        downloadsSignature = downloadsZoomSignature()
+        zoomDownloadsEnabled = true
+    }
+
+    private func downloadsZoomSignature() -> String {
+        let dir = Paths.home.appending(path: "Downloads")
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.filter { $0.hasPrefix("GMT") }.sorted().joined(separator: "|")
+    }
+
     func processAllZoom() {
         runPipeline(["zoom", "--all"], title: "Zoom 녹화 처리")
     }
@@ -642,7 +660,17 @@ final class AppModel: ObservableObject {
     private func startZoomWatcher() {
         zoomTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self, self.zoomEnabled, self.setupDone, !self.isBusy, !self.recorder.isRecording else { return }
+                guard let self, self.setupDone, !self.isBusy, !self.recorder.isRecording else { return }
+                // 다운로드 폴더에 Zoom 클라우드 녹화 파일이 새로 생겼거나 바뀌었으면 (내려받기 끝나면 이름이 바뀜)
+                if self.zoomDownloadsEnabled {
+                    let dsig = self.downloadsZoomSignature()
+                    if dsig != self.downloadsSignature {
+                        self.downloadsSignature = dsig
+                        if !dsig.isEmpty { self.runPipeline(["zoom-downloads"], title: "Zoom 다운로드 정리") }
+                        return
+                    }
+                }
+                guard self.zoomEnabled else { return }
                 let (sig, recent) = self.zoomFolderSignature()
                 guard !sig.isEmpty else { return }
                 let changed = sig != self.zoomSignature

@@ -450,6 +450,21 @@ def cmd_zoom(args):
     return pipeline.run_zoom(cfg, dry_run=args.dry_run, skip_existing=args.skip_existing, include_seen=args.all)
 
 
+def cmd_zoom_downloads(args):
+    """다운로드 폴더의 Zoom 클라우드 녹화 파일 처리. --check 는 접근·개수(JSON)."""
+    from . import zoom
+    root = Path(args.dir).expanduser() if args.dir else zoom.DOWNLOADS_DIR
+    if args.check:
+        try:
+            print(json.dumps({"ok": True, "count": len(zoom.find_cloud_downloads(root)), "path": str(root)}))
+            return 0
+        except PermissionError:
+            print(json.dumps({"ok": False, "error": "permission", "path": str(root)}))
+            return 1
+    return pipeline.run_zoom_downloads(config.load(), root=root, dry_run=args.dry_run,
+                                       skip_existing=args.skip_existing, include_seen=args.all)
+
+
 def cmd_zoom_cloud(args):
     """Zoom 클라우드 녹화. --check 는 연결 확인과 최근 녹화 수(JSON)."""
     from . import zoom_cloud
@@ -602,6 +617,13 @@ def main():
     p.add_argument("--skip-existing", action="store_true", help="지금 있는 녹화는 처리하지 않고 건너뛰기")
     p.add_argument("--all", action="store_true", help="건너뛰기 표시한 녹화까지 처리")
     p.set_defaults(fn=cmd_zoom)
+    p = sub.add_parser("zoom-downloads", help="웹에서 내려받은 Zoom 클라우드 녹화(GMT…_Recording) 처리")
+    p.add_argument("--check", action="store_true")
+    p.add_argument("--dir", help="찾을 폴더 (기본 ~/Downloads)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--skip-existing", action="store_true")
+    p.add_argument("--all", action="store_true")
+    p.set_defaults(fn=cmd_zoom_downloads)
     p = sub.add_parser("zoom-cloud", help="Zoom 클라우드 녹화 내려받아 처리")
     p.add_argument("--check", action="store_true", help="연결 확인·최근 녹화 수(JSON)")
     p.add_argument("--days", type=int, help="확인할 기간(일, 기본 30)")
@@ -646,7 +668,7 @@ def main():
     import signal
     # '중지' 버튼(SIGTERM)에도 정리 코드(atexit: running.json 삭제)가 돌도록
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    if args.cmd in ("run", "process", "memos", "publish", "resummarize", "zoom", "zoom-cloud") and not getattr(args, "dry_run", False) \
+    if args.cmd in ("run", "process", "memos", "publish", "resummarize", "zoom", "zoom-cloud", "zoom-downloads") and not getattr(args, "dry_run", False) \
             and not getattr(args, "check", False):
         pipeline.mark_running()
         if config.load().low_power:

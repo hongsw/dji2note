@@ -73,3 +73,41 @@ def prepare_audio(info: dict, out_dir: Path) -> Path:
         side["chat"] = info["chat"].read_text(errors="replace")[:20000]
     dst.with_suffix(".json").write_text(json.dumps(side, ensure_ascii=False))
     return dst
+
+
+# ── 웹에서 내려받은 Zoom 클라우드 녹화 (관리자 권한 없이 쓰는 방법) ──────────────
+# 내 녹화 페이지에서 다운로드하면 'GMT20261003-053000_Recording.m4a',
+# 'GMT20261003-053000_Recording_1920x1080.mp4', 'GMT…_RecordingnewChat.txt' 처럼
+# 녹화 시작 시각(UTC)이 이름 앞에 붙는다. 이 시각으로 한 회의의 파일을 묶는다.
+
+DOWNLOADS_DIR = Path.home() / "Downloads"
+CLOUD_RE = re.compile(r"^GMT(\d{8})-(\d{6})_?(.*)$")
+PARTIAL_EXTS = (".crdownload", ".download", ".part", ".partial")
+
+
+def find_cloud_downloads(root: Path = DOWNLOADS_DIR) -> list[dict]:
+    """다운로드 폴더의 Zoom 클라우드 녹화 묶음 (권한 없으면 PermissionError)."""
+    from datetime import timezone
+    groups: dict[str, list[Path]] = {}
+    for p in root.iterdir():
+        m = CLOUD_RE.match(p.name)
+        if m and p.is_file():
+            groups.setdefault(f"{m.group(1)}-{m.group(2)}", []).append(p)
+    out = []
+    now = time.time()
+    for stamp, files in groups.items():
+        if any(f.name.endswith(PARTIAL_EXTS) for f in files):  # 아직 내려받는 중
+            continue
+        if now - max(f.stat().st_mtime for f in files) < 30:
+            continue
+        audio = sorted(f for f in files if f.suffix.lower() == ".m4a")
+        video = sorted((f for f in files if f.suffix.lower() == ".mp4"), key=lambda f: f.stat().st_size)
+        mixed = audio[0] if audio else (video[0] if video else None)  # 영상은 가장 작은 해상도
+        if not mixed:
+            continue
+        chat = next((f for f in files if f.suffix.lower() == ".txt" and "chat" in f.name.lower()), None)
+        start = (datetime.strptime(stamp, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc)
+                 .astimezone().replace(tzinfo=None))
+        out.append({"key": "zoomdl:GMT" + stamp, "folder": root, "start": start, "topic": "",
+                    "participants": [], "mixed": mixed, "chat": chat})
+    return sorted(out, key=lambda i: i["start"])

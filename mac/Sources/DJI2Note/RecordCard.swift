@@ -199,6 +199,12 @@ struct ZoomSection: View {
                 Button("건너뛴 기존 Zoom 녹화도 모두 처리") { model.processAllZoom() }
                     .disabled(model.isBusy)
             }
+            Toggle("웹에서 내려받은 Zoom 클라우드 녹화도 자동 정리 (다운로드 폴더)", isOn: Binding(
+                get: { model.zoomDownloadsEnabled },
+                set: { v in
+                    if v { Task { await model.enableZoomDownloads() } } else { model.zoomDownloadsEnabled = false }
+                }))
+                .help("Zoom 웹 '내 녹화'에서 다운로드한 GMT…_Recording 파일을 알아서 정리합니다. 관리자 권한이 없는 학교·회사 계정에 맞는 방법입니다")
         } header: {
             Text("Zoom")
         } footer: {

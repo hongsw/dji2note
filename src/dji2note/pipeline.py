@@ -481,6 +481,50 @@ def run_zoom(cfg: Config, dry_run: bool = False, skip_existing: bool = False, in
     return 0
 
 
+def run_zoom_downloads(cfg: Config, root: Path | None = None, dry_run: bool = False,
+                       skip_existing: bool = False, include_seen: bool = False):
+    """다운로드 폴더에 내려받은 Zoom 클라우드 녹화를 처리한다(앱이 폴더 변화를 감지하면 호출)."""
+    from . import zoom
+    root = root or zoom.DOWNLOADS_DIR
+    state = config.load_state()
+    try:
+        meetings = zoom.find_cloud_downloads(root)
+    except PermissionError:
+        log(f"다운로드 폴더 접근 권한이 없습니다 — {root}")
+        return 2
+    new = [m for m in meetings if m["key"] not in state
+           or (include_seen and state[m["key"]].get("status") == "seen")]
+    now = datetime.now().isoformat(timespec="seconds")
+    if skip_existing:
+        for m in new:
+            state[m["key"]] = {"status": "seen", "at": now}
+        config.save_state(state)
+        log(f"기존 Zoom 다운로드 {len(new)}개는 건너뜁니다")
+        return 0
+    if dry_run:
+        for m in new:
+            print(f"  {m['start']:%Y-%m-%d %H:%M}  {m['mixed'].name}" + ("  + 채팅" if m["chat"] else ""))
+        return 0
+    lock = open(config.LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("이미 실행 중")
+        return 0
+    for i, m in enumerate(new, 1):
+        try:
+            log(f"Zoom 녹화 준비 [{i}/{len(new)}]: {m['mixed'].name} (다운로드)")
+            audio = zoom.prepare_audio(m, cfg.recordings_dir)
+            rec = recording_info(audio) | {"duration": duration(audio)}
+            res = process_session(cfg, [rec], copy=False, index=(i, len(new)))
+            state[m["key"]] = {**res, "at": datetime.now().isoformat(timespec="seconds")}
+        except Exception as e:
+            log(f"실패: {m['mixed'].name}: {e}")
+        config.save_state(state)
+    log(f"전체 완료: Zoom 다운로드 {len(new)}개 확인")
+    return 0
+
+
 def run_zoom_cloud(cfg: Config, dry_run: bool = False, skip_existing: bool = False,
                    include_seen: bool = False, days: int | None = None):
     """Zoom 클라우드의 새 녹화를 내려받아 처리한다(앱이 15분마다 호출)."""
