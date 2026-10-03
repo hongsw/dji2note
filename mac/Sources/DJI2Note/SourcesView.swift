@@ -86,8 +86,10 @@ struct SourceCard<Detail: View>: View {
     let badge: SourceBadge.Kind
     var count: Int = 0
     var isOn: Binding<Bool>?
+    var startExpanded = false
     @ViewBuilder var detail: () -> Detail
     @State private var expanded = false
+    @State private var didSetInitial = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -122,6 +124,7 @@ struct SourceCard<Detail: View>: View {
             }
         }
         .padding(12)
+        .onAppear { if !didSetInitial { expanded = startExpanded; didSetInitial = true } }
         .background(RoundedRectangle(cornerRadius: 10).fill(Color(nsColor: .controlBackgroundColor)))
         .overlay(RoundedRectangle(cornerRadius: 10).stroke(Color.secondary.opacity(0.2)))
     }
@@ -243,14 +246,14 @@ struct SourcesTab: View {
                                         set: { v in
                                             if v { Task { await model.enableZoomDownloads(); checkDownloads() } }
                                             else { model.zoomDownloadsEnabled = false }
-                                        })) {
+                                        }),
+                          startExpanded: model.zoomDownloadsEnabled) {
             if downloadsAccess == false {
                 permissionRow("다운로드 폴더를 읽을 권한이 필요합니다", pane: "Privacy_FilesAndFolders")
             }
             Text("GMT20261003-053000_Recording.m4a 같은 Zoom 다운로드 파일을 회의별로 묶고, 채팅 파일도 함께 반영합니다. 켤 때 이미 있던 파일은 건너뜁니다.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button("다운로드 폴더의 기존 Zoom 녹화도 모두 정리") { model.processAllZoomDownloads() }
-                .disabled(model.isBusy)
+            ZoomDownloadsCheck()
         }
     }
 
@@ -299,5 +302,94 @@ struct SourcesTab: View {
         if panel.runModal() == .OK, let url = panel.url {
             Task { await model.setZoomDir(url) }
         }
+    }
+}
+
+/// 점검 표: 다운로드 폴더에 받은 Zoom 클라우드 녹화가 회의별로 정리됐는지
+struct ZoomDownloadsCheck: View {
+    @EnvironmentObject var model: AppModel
+    @State private var showOld = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("점검").font(.callout.weight(.semibold))
+                if let rows = visible, !rows.isEmpty {
+                    Text(summary(rows)).font(.caption).foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    NSWorkspace.shared.open(URL(string: "https://zoom.us/recording")!)
+                } label: { Label("Zoom 내 녹화 열기", systemImage: "arrow.up.right.square") }
+                .help("클라우드에 있는 녹화 목록과 비교해 아직 안 받은 것이 있는지 확인하세요")
+                Button { Task { await model.refreshZoomDownloadRows() } } label: { Image(systemName: "arrow.clockwise") }
+                    .help("새로고침")
+            }
+            if model.zoomDownloadRows == nil {
+                Text("다운로드 폴더를 읽을 수 없습니다 — 위 스위치를 켜고 권한을 허용하세요.")
+                    .font(.caption).foregroundStyle(.orange)
+            } else if let rows = visible, rows.isEmpty {
+                Text("다운로드 폴더에 Zoom 녹화 파일(GMT…_Recording)이 없습니다. Zoom 내 녹화에서 다운로드하세요.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let rows = visible {
+                VStack(spacing: 0) {
+                    ForEach(rows) { r in
+                        row(r)
+                        if r.id != rows.last?.id { Divider() }
+                    }
+                }
+                .background(RoundedRectangle(cornerRadius: 8).fill(Color.secondary.opacity(0.05)))
+                let old = (model.zoomDownloadRows ?? []).count - rows.count
+                if old > 0 {
+                    Toggle("소리 파일 없는 예전 항목 \(old)개도 보기", isOn: $showOld).toggleStyle(.checkbox).font(.caption)
+                }
+            }
+            HStack {
+                Button("정리 안 된 것 모두 정리") { model.processAllZoomDownloads() }
+                    .disabled(model.isBusy || !(visible ?? []).contains { $0.status == "new" || $0.status == "seen" })
+                Text("받는 중인 파일은 끝나면 자동으로 정리됩니다.").font(.caption2).foregroundStyle(.secondary)
+            }
+        }
+        .task { await model.refreshZoomDownloadRows() }
+        .onChange(of: model.isBusy) { _, busy in if !busy { Task { await model.refreshZoomDownloadRows() } } }
+    }
+
+    private var visible: [AppModel.ZoomDownloadRow]? {
+        guard let rows = model.zoomDownloadRows else { return nil }
+        return showOld ? rows : rows.filter { $0.status != "no_audio" }
+    }
+
+    private func summary(_ rows: [AppModel.ZoomDownloadRow]) -> String {
+        let done = rows.filter { $0.status == "done" }.count
+        let pending = rows.filter { $0.status == "new" || $0.status == "seen" }.count
+        let dl = rows.filter { $0.status == "downloading" }.count
+        var parts = ["회의 \(rows.count)건", "정리됨 \(done)"]
+        if pending > 0 { parts.append("정리 전 \(pending)") }
+        if dl > 0 { parts.append("받는 중 \(dl)") }
+        return parts.joined(separator: " · ")
+    }
+
+    private func row(_ r: AppModel.ZoomDownloadRow) -> some View {
+        HStack(spacing: 10) {
+            Text(r.start.replacingOccurrences(of: "T", with: " ").dropFirst(5))
+                .font(.callout.monospacedDigit())
+            Text(r.kinds.joined(separator: "·") + " · \(r.size_mb)MB").font(.caption).foregroundStyle(.secondary)
+            Spacer()
+            let (text, color): (String, Color) = switch r.status {
+            case "done": ("정리됨", .green)
+            case "downloading": ("받는 중", .orange)
+            case "no_audio": ("소리 없음", .secondary)
+            case "seen": ("건너뜀", .secondary)
+            case "no_speech": ("대화 없음", .secondary)
+            default: ("정리 전", .blue)
+            }
+            Text(text).font(.caption.weight(.medium)).padding(.horizontal, 7).padding(.vertical, 2)
+                .background(color.opacity(0.12), in: Capsule()).foregroundStyle(color)
+            if r.status == "done", !r.notes.isEmpty {
+                Button { NSWorkspace.shared.open(URL(filePath: r.notes)) } label: { Image(systemName: "folder") }
+                    .buttonStyle(.borderless).help("회의록 폴더")
+            }
+        }
+        .padding(.horizontal, 10).padding(.vertical, 6)
     }
 }

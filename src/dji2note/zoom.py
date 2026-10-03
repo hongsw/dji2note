@@ -85,6 +85,30 @@ CLOUD_RE = re.compile(r"^GMT(\d{8})-(\d{6})_?(.*)$")
 PARTIAL_EXTS = (".crdownload", ".download", ".part", ".partial")
 
 
+def list_cloud_downloads(root: Path = DOWNLOADS_DIR) -> list[dict]:
+    """점검용: 다운로드 폴더의 Zoom 녹화 묶음을 상태와 함께 (받는 중·소리 없음 포함)."""
+    from datetime import timezone
+    groups: dict[str, list[Path]] = {}
+    for p in root.iterdir():
+        m = CLOUD_RE.match(p.name)
+        if m and p.is_file():
+            groups.setdefault(f"{m.group(1)}-{m.group(2)}", []).append(p)
+    rows = []
+    for stamp, files in groups.items():
+        real = [f for f in files if not re.search(r" \(\d+\)\.\w+$", f.name)]
+        kinds = sorted({("영상" if f.suffix.lower() == ".mp4" else "오디오" if f.suffix.lower() == ".m4a"
+                         else "채팅" if "chat" in f.name.lower() else "자막" if f.suffix.lower() == ".vtt"
+                         else "받는 중" if f.name.endswith(PARTIAL_EXTS) else f.suffix.lstrip("."))
+                        for f in real})
+        start = (datetime.strptime(stamp, "%Y%m%d-%H%M%S").replace(tzinfo=timezone.utc).astimezone()
+                 .replace(tzinfo=None))
+        rows.append({"key": "zoomdl:GMT" + stamp, "start": start.isoformat(timespec="minutes"),
+                     "kinds": kinds, "size_mb": round(sum(f.stat().st_size for f in real) / 1e6),
+                     "downloading": any(f.name.endswith(PARTIAL_EXTS) for f in files),
+                     "has_audio": any(f.suffix.lower() in (".m4a", ".mp4") for f in real)})
+    return sorted(rows, key=lambda r: r["start"], reverse=True)
+
+
 def find_cloud_downloads(root: Path = DOWNLOADS_DIR) -> list[dict]:
     """다운로드 폴더의 Zoom 클라우드 녹화 묶음 (권한 없으면 PermissionError)."""
     from datetime import timezone

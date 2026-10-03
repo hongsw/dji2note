@@ -634,6 +634,26 @@ final class AppModel: ObservableObject {
         zoomDownloadsEnabled = true
     }
 
+    struct ZoomDownloadRow: Decodable, Identifiable {
+        let key: String
+        let start: String
+        let kinds: [String]
+        let size_mb: Int
+        let status: String
+        let notes: String
+        let drive_url: String
+        var id: String { key }
+    }
+    private struct ZoomDownloadList: Decodable { let ok: Bool; let rows: [ZoomDownloadRow]?; let error: String? }
+
+    /// 점검: 다운로드 폴더의 Zoom 녹화가 회의별로 어떤 상태인지 (nil = 권한 없음)
+    @Published var zoomDownloadRows: [ZoomDownloadRow]?
+
+    func refreshZoomDownloadRows() async {
+        let r = await Engine.json(["zoom-downloads", "--list"], as: ZoomDownloadList.self)
+        zoomDownloadRows = r?.ok == true ? (r?.rows ?? []) : nil
+    }
+
     /// 다운로드 폴더의 기존 Zoom 녹화 파일까지 모두 정리 (켤 때 건너뛴 것 포함)
     func processAllZoomDownloads() {
         runPipeline(["zoom-downloads", "--all"], title: "Zoom 다운로드 정리")

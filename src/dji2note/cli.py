@@ -454,6 +454,22 @@ def cmd_zoom_downloads(args):
     """다운로드 폴더의 Zoom 클라우드 녹화 파일 처리. --check 는 접근·개수(JSON)."""
     from . import zoom
     root = Path(args.dir).expanduser() if args.dir else zoom.DOWNLOADS_DIR
+    if args.list:
+        # 점검 화면용: 회의마다 받은 파일 종류와 처리 상태
+        state = config.load_state()
+        try:
+            rows = zoom.list_cloud_downloads(root)
+        except PermissionError:
+            print(json.dumps({"ok": False, "error": "permission"}))
+            return 1
+        for r in rows:
+            st = state.get(r["key"], {})
+            r["status"] = ("downloading" if r["downloading"] else "no_audio" if not r["has_audio"]
+                           else st.get("status", "new"))
+            r["notes"] = st.get("notes", "")
+            r["drive_url"] = st.get("drive_url", "")
+        print(json.dumps({"ok": True, "rows": rows}, ensure_ascii=False))
+        return 0
     if args.check:
         try:
             print(json.dumps({"ok": True, "count": len(zoom.find_cloud_downloads(root)), "path": str(root)}))
@@ -620,6 +636,7 @@ def main():
     p = sub.add_parser("zoom-downloads", help="웹에서 내려받은 Zoom 클라우드 녹화(GMT…_Recording) 처리")
     p.add_argument("--check", action="store_true")
     p.add_argument("--dir", help="찾을 폴더 (기본 ~/Downloads)")
+    p.add_argument("--list", action="store_true", help="점검: 회의별 파일·처리 상태(JSON)")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--skip-existing", action="store_true")
     p.add_argument("--all", action="store_true")
