@@ -29,6 +29,7 @@ struct EngineConfig: Codable, Equatable {
     var notion_parent: String?
     var low_power: Bool?
     var default_situation: String?
+    var zoom_dir: String?
 
     struct Provider: Codable, Equatable {
         let title: String
@@ -222,6 +223,7 @@ final class AppModel: ObservableObject {
         // 녹음 상태가 바뀌면 메뉴바 아이콘 등 AppModel을 보는 화면도 갱신
         recorderSink = recorder.objectWillChange.sink { [weak self] _ in self?.objectWillChange.send() }
         startMemosWatcher()
+        startZoomWatcher()
         // 터미널·단축어 등 다른 곳에서 시작한 처리에도 자동으로 붙기
         attachTimer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.attachIfEngineRunning() }
@@ -571,6 +573,82 @@ final class AppModel: ObservableObject {
         }
     }
 
+    // MARK: Zoom 로컬 녹화 자동 처리
+
+    struct ZoomCheck: Decodable {
+        let ok: Bool
+        let path: String
+        let count: Int?
+        let per_person: Int?
+        let error: String?
+    }
+
+    @Published var zoomEnabled = UserDefaults.standard.bool(forKey: "zoomEnabled") {
+        didSet { UserDefaults.standard.set(zoomEnabled, forKey: "zoomEnabled") }
+    }
+    @Published var zoomStatus: ZoomCheck?
+    private var zoomTimer: Timer?
+    private var zoomSignature = ""
+    private var zoomLastRun = Date.distantPast
+
+    var zoomDir: URL {
+        let p = config.zoom_dir ?? ""
+        return p.isEmpty ? Paths.home.appending(path: "Documents/Zoom")
+                         : URL(filePath: p.replacingOccurrences(of: "~", with: Paths.home.path))
+    }
+
+    func checkZoom() async {
+        zoomStatus = await Engine.json(["zoom", "--check"], as: ZoomCheck.self)
+    }
+
+    func setZoomDir(_ url: URL) async {
+        await Engine.cli(["zoom", "--dir", url.path, "--check"])
+        await refresh()
+        await checkZoom()
+    }
+
+    /// 켤 때: 지금 있는 녹화는 건너뛰고 앞으로 생기는 회의만 (기존 것도 원하면 processAllZoom)
+    func enableZoom() async {
+        await checkZoom()
+        guard zoomStatus?.ok == true else { return }
+        await Engine.cli(["zoom", "--skip-existing"])
+        zoomSignature = zoomFolderSignature().sig
+        zoomEnabled = true
+    }
+
+    func processAllZoom() {
+        runPipeline(["zoom", "--all"], title: "Zoom 녹화 처리")
+    }
+
+    /// 녹화 폴더 목록 + 최근 활동 여부 (Zoom 변환 중이면 파일이 계속 바뀜)
+    private func zoomFolderSignature() -> (sig: String, recent: Bool) {
+        let fm = FileManager.default
+        let items = (try? fm.contentsOfDirectory(at: zoomDir, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
+        var recent = false
+        let parts = items.map { url -> String in
+            let m = (try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate) ?? .distantPast
+            if Date().timeIntervalSince(m) < 600 { recent = true }
+            return "\(url.lastPathComponent)@\(Int(m.timeIntervalSince1970))"
+        }
+        return (parts.sorted().joined(separator: "|"), recent)
+    }
+
+    /// 1분마다: 폴더가 바뀌었거나, 최근 10분 안에 활동이 있으면(변환 끝나기를 기다리는 중) 2분 간격으로 처리 시도
+    private func startZoomWatcher() {
+        zoomTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.zoomEnabled, self.setupDone, !self.isBusy, !self.recorder.isRecording else { return }
+                let (sig, recent) = self.zoomFolderSignature()
+                guard !sig.isEmpty else { return }
+                let changed = sig != self.zoomSignature
+                guard changed || (recent && Date().timeIntervalSince(self.zoomLastRun) > 110) else { return }
+                self.zoomSignature = sig
+                self.zoomLastRun = Date()
+                self.runPipeline(["zoom"], title: "새 Zoom 녹화 처리")
+            }
+        }
+    }
+
     struct NotionTest: Decodable {
         let ok: Bool
         let type: String?
@@ -711,6 +789,10 @@ final class AppModel: ObservableObject {
         } else if line.contains("저장: ") {
             statusText = (config.upload == "rclone" ? "Google Drive에 올리는 중" : "저장 완료") + position
             progress = nil
+        } else if let r = line.range(of: "Zoom 녹화 준비") {
+            setStage(.copy)
+            statusText = "Zoom 녹화 준비 중"
+            currentItem = String(line[r.upperBound...]).trimmingCharacters(in: CharacterSet(charactersIn: " :[]0123456789/"))
         } else if line.contains("Notion에 올리는 중") {
             statusText = "Notion에 올리는 중\(position)"
         } else if let m = line.firstMatch(of: /올림 \[(\d+)\/(\d+)\]/) {

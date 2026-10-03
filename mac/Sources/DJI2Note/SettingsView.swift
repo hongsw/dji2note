@@ -9,7 +9,7 @@ struct SettingsView: View {
     var body: some View {
         TabView(selection: $tab) {
             HistoryTab().tabItem { Label("회의록", systemImage: "doc.text") }.tag("history")
-            Form { GeneralSection(); AutomationSection(); VoiceMemosSection() }.formStyle(.grouped)
+            Form { GeneralSection(); AutomationSection(); ZoomSection(); VoiceMemosSection() }.formStyle(.grouped)
                 .tabItem { Label("일반", systemImage: "gearshape") }.tag("general")
             Form { AISection() }.formStyle(.grouped)
                 .tabItem { Label("AI", systemImage: "sparkles") }.tag("ai")

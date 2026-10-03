@@ -153,3 +153,69 @@ struct VoiceMemosSection: View {
         .onAppear { model.checkMemosAccess() }
     }
 }
+
+/// 일반 설정: Zoom 로컬 녹화 자동 처리
+struct ZoomSection: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        Section {
+            Toggle("Zoom 녹화가 끝나면 자동으로 가져와 정리", isOn: Binding(
+                get: { model.zoomEnabled },
+                set: { v in
+                    if v { Task { await model.enableZoom() } } else { model.zoomEnabled = false }
+                }))
+            LabeledContent("녹화 폴더") {
+                HStack {
+                    Text(model.zoomDir.path.replacingOccurrences(of: Paths.home.path, with: "~"))
+                        .lineLimit(1).truncationMode(.middle).foregroundStyle(.secondary)
+                    Button("변경…") { pick() }
+                }
+            }
+            if let s = model.zoomStatus {
+                if s.ok {
+                    LabeledContent("녹화") {
+                        Text("\(s.count ?? 0)개" + ((s.per_person ?? 0) > 0 ? " · 참가자별 오디오 \(s.per_person ?? 0)개" : ""))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if s.error == "permission" {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("녹화 폴더(문서 폴더)를 읽을 권한이 필요합니다", systemImage: "lock").foregroundStyle(.orange)
+                        Text("권한 창이 뜨면 '허용'을 누르세요. 이미 거부했다면 시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 → DJI2Note → 문서 폴더를 켜세요.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        HStack {
+                            Button("시스템 설정 열기") {
+                                NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_FilesAndFolders")!)
+                            }
+                            Button("다시 확인") { Task { await model.checkZoom() } }
+                        }
+                    }
+                } else {
+                    Label("녹화 폴더가 없습니다 — Zoom 설정 → 녹화 → 로컬 녹화 저장 위치를 확인하세요", systemImage: "folder.badge.questionmark")
+                        .font(.caption).foregroundStyle(.orange)
+                }
+            }
+            if model.zoomEnabled {
+                Button("건너뛴 기존 Zoom 녹화도 모두 처리") { model.processAllZoom() }
+                    .disabled(model.isBusy)
+            }
+        } header: {
+            Text("Zoom")
+        } footer: {
+            Text("Zoom 설정 → 녹화 → '참가자별로 별도의 오디오 파일 녹음'을 켜면 화자를 실제 참가자 이름으로 정확히 나눕니다. 회의 중 채팅도 요약에 반영됩니다. (로컬 녹화만 해당)")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .task { await model.checkZoom() }
+    }
+
+    private func pick() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.directoryURL = model.zoomDir
+        panel.message = "Zoom 로컬 녹화가 저장되는 폴더를 고르세요"
+        if panel.runModal() == .OK, let url = panel.url {
+            Task { await model.setZoomDir(url) }
+        }
+    }
+}

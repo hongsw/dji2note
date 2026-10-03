@@ -427,6 +427,28 @@ def cmd_resummarize(args):
     pipeline.log("전체 완료: 다시 요약 1건")
 
 
+def cmd_zoom(args):
+    """Zoom 로컬 녹화 처리. --check 는 폴더 접근·녹화 수 확인(JSON)."""
+    from . import zoom
+    cfg = config.load()
+    if args.dir:
+        cfg.zoom_dir = args.dir
+        config.save(cfg)
+    root = Path(cfg.zoom_dir).expanduser() if cfg.zoom_dir else zoom.DEFAULT_DIR
+    if args.check:
+        try:
+            meetings = zoom.find_meetings(root)
+            print(json.dumps({"ok": True, "path": str(root), "count": len(meetings),
+                              "per_person": sum(1 for m in meetings if m["participants"])}, ensure_ascii=False))
+            return 0
+        except PermissionError:
+            print(json.dumps({"ok": False, "error": "permission", "path": str(root)}, ensure_ascii=False))
+        except FileNotFoundError:
+            print(json.dumps({"ok": False, "error": "missing", "path": str(root)}, ensure_ascii=False))
+        return 1
+    return pipeline.run_zoom(cfg, dry_run=args.dry_run, skip_existing=args.skip_existing, include_seen=args.all)
+
+
 def cmd_notion(args):
     """Notion 연결 확인: 토큰과 회의록 페이지(또는 DB)에 접근되는지."""
     cfg = config.load()
@@ -553,6 +575,13 @@ def main():
     p.add_argument("folder")
     p.add_argument("--situation", required=True)
     p.set_defaults(fn=cmd_resummarize)
+    p = sub.add_parser("zoom", help="Zoom 로컬 녹화의 새 회의 처리")
+    p.add_argument("--check", action="store_true", help="폴더 접근·녹화 수 확인(JSON)")
+    p.add_argument("--dir", help="Zoom 녹화 폴더 지정(저장됨)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--skip-existing", action="store_true", help="지금 있는 녹화는 처리하지 않고 건너뛰기")
+    p.add_argument("--all", action="store_true", help="건너뛰기 표시한 녹화까지 처리")
+    p.set_defaults(fn=cmd_zoom)
     p = sub.add_parser("memos", help="Mac 음성 메모의 새 녹음 처리")
     p.add_argument("--check", action="store_true", help="폴더 접근 권한 확인(JSON)")
     p.add_argument("--dry-run", action="store_true")
@@ -590,7 +619,7 @@ def main():
     import signal
     # '중지' 버튼(SIGTERM)에도 정리 코드(atexit: running.json 삭제)가 돌도록
     signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
-    if args.cmd in ("run", "process", "memos", "publish", "resummarize") and not getattr(args, "dry_run", False) \
+    if args.cmd in ("run", "process", "memos", "publish", "resummarize", "zoom") and not getattr(args, "dry_run", False) \
             and not getattr(args, "check", False):
         pipeline.mark_running()
         if config.load().low_power:

@@ -241,8 +241,13 @@ def make_transcript(cfg: Config, raw: str, log=print, cache_dir: Path | None = N
 
     from . import situations
     sit = situations.get(situation)
-    hint = (f"\n\n이 녹음의 상황: {sit['title']}. 화자 이름은 {sit['speakers']} 표기하라."
-            if sit.get("speakers") else "")
+    if re.search(r"dB @", raw):
+        # 채널(참가자별 녹음)로 화자가 확정된 경우: 상황 기본 이름보다 실제 이름이 우선
+        hint = (f"\n\n이 녹음의 상황: {sit['title']}. 화자 이름은 각 줄의 `@이름`(채널로 확정된 실제 참가자)을 "
+                "그대로 써라. '나', '상대방', 'A' 같은 이름으로 바꾸지 말 것.")
+    else:
+        hint = (f"\n\n이 녹음의 상황: {sit['title']}. 화자 이름은 {sit['speakers']} 표기하라."
+                if sit.get("speakers") else "")
 
     def prompt_for(chunk: str) -> str:
         return TRANSCRIPT_PROMPT.format(raw=chunk).replace("\n원문:\n", hint + "\n\n원문:\n", 1)

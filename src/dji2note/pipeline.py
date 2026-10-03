@@ -15,7 +15,7 @@ from .config import Config
 
 # DJI Mic / Mic 2 / Mic Mini 파일명: TX00_MIC025_20260928_112702_orig.wav
 DJI_RE = re.compile(r"^(TX|RX)\d*_MIC(\d+)_(\d{8})_(\d{6})(?:_\w+)?\.wav$", re.I)
-APP_REC_RE = re.compile(r"^(REC|MEET)_(\d{8})_(\d{6})", re.I)
+APP_REC_RE = re.compile(r"^(REC|MEET|ZOOM)_(\d{8})_(\d{6})", re.I)
 GROUP_GAP_SEC = 90     # 앞 파일 끝과 이 간격 이내로 이어지면 한 세션(분할 저장 파일)
 MIN_TEXT_CHARS = 40    # 전사가 이보다 짧으면 대화 없음
 
@@ -96,7 +96,7 @@ def recording_info(path: Path) -> dict:
     elif app:
         # 앱에서 녹음한 파일: REC_20261001_103015.wav(마이크) / MEET_…(온라인 회의)
         start = datetime.strptime(app.group(2) + app.group(3), "%Y%m%d%H%M%S")
-        label = {"REC": "녹음", "MEET": "온라인회의"}[app.group(1).upper()]
+        label = {"REC": "녹음", "MEET": "온라인회의", "ZOOM": "Zoom"}[app.group(1).upper()]
     else:
         start = datetime.fromtimestamp(path.stat().st_mtime)
         label = re.sub(r"[^\w가-힣-]+", "_", path.stem)[:40]
@@ -221,6 +221,9 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
     label = first["label"] if len(group) == 1 else f"{first['label']}-{last['label']}"
     folder = cfg.notes_dir / f"{first['start']:%Y-%m-%d_%H%M}_{label}"
     title = f"{first['start']:%Y-%m-%d %H:%M} ({int(total // 60)}분 {int(total % 60)}초)"
+    side = sidecar(Path(first["src"]))
+    if side.get("title"):  # Zoom 회의 이름 등
+        title += f" · {side['title']}"
     pos = f" [{index[0]}/{index[1]}]" if index else ""
     log(f"처리 시작{pos}: {folder.name} (파일 {len(group)}개, {total / 60:.1f}분)")
 
@@ -250,6 +253,8 @@ def process_session(cfg: Config, group: list[dict], copy: bool = True, index: tu
         (folder / "transcript.md").write_text(transcript_doc(title, body, "none", speakers_for(Path(first["src"]))))
     else:
         body = llm.make_transcript(cfg, raw, log=log, cache_dir=folder / ".chunks", situation=situation)
+        if side.get("chat"):  # Zoom 회의 중 채팅도 요약에 반영
+            body += "\n\n## 회의 중 채팅\n\n" + "\n".join(f"- {l.strip()}" for l in side["chat"].splitlines() if l.strip())
         transcript = transcript_doc(title, body, cfg.llm_backend, speakers_for(Path(first["src"])))
         (folder / "transcript.md").write_text(transcript)
         log(f"요약 작성 중 ({cfg.llm_model or '기본 모델'})")
@@ -425,6 +430,54 @@ def run_memos(cfg: Config, dry_run: bool = False, skip_existing: bool = False, i
             log(f"실패: {r['name']}: {e}")
         config.save_state(state)
     log(f"전체 완료: 음성 메모 {len(new)}개 확인")
+    return 0
+
+
+def run_zoom(cfg: Config, dry_run: bool = False, skip_existing: bool = False, include_seen: bool = False):
+    """Zoom 로컬 녹화 폴더의 새 회의를 처리한다(앱이 폴더 변화를 감지하면 호출)."""
+    from . import zoom
+    root = Path(cfg.zoom_dir).expanduser() if cfg.zoom_dir else zoom.DEFAULT_DIR
+    state = config.load_state()
+    try:
+        meetings = zoom.find_meetings(root)
+    except PermissionError:
+        log(f"Zoom 녹화 폴더 접근 권한이 없습니다 — {root} (시스템 설정 → 개인정보 보호 및 보안 → 파일 및 폴더 또는 전체 디스크 접근)")
+        return 2
+    except FileNotFoundError:
+        log(f"Zoom 녹화 폴더가 없습니다: {root}")
+        return 1
+    new = [m for m in meetings if m["key"] not in state
+           or (include_seen and state[m["key"]].get("status") == "seen")]
+    now = datetime.now().isoformat(timespec="seconds")
+    if skip_existing:
+        for m in new:
+            state[m["key"]] = {"status": "seen", "at": now}
+        config.save_state(state)
+        log(f"기존 Zoom 녹화 {len(new)}개는 건너뜁니다")
+        return 0
+    if dry_run:
+        for m in new:
+            who = f"참가자 {len(m['participants'])}명 따로" if m["participants"] else "섞인 소리"
+            print(f"  {m['start']:%Y-%m-%d %H:%M}  {m['topic'] or '(이름 없음)'}  — {who}")
+        return 0
+    lock = open(config.LOCK_FILE, "w")
+    try:
+        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        log("이미 실행 중")
+        return 0
+    for i, m in enumerate(new, 1):
+        try:
+            log(f"Zoom 녹화 준비 [{i}/{len(new)}]: {m['topic'] or m['folder'].name}"
+                + (f" (참가자 {len(m['participants'])}명 따로)" if m["participants"] else ""))
+            audio = zoom.prepare_audio(m, cfg.recordings_dir)
+            rec = recording_info(audio) | {"duration": duration(audio)}
+            res = process_session(cfg, [rec], copy=False, index=(i, len(new)))
+            state[m["key"]] = {**res, "at": datetime.now().isoformat(timespec="seconds")}
+        except Exception as e:
+            log(f"실패: {m['folder'].name}: {e}")
+        config.save_state(state)
+    log(f"전체 완료: Zoom 녹화 {len(new)}개 확인")
     return 0
 
 
